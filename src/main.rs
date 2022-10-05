@@ -48,7 +48,7 @@ fn main() {
     //println!("{} has {} nodes", args.alignments, lines);
     let mut coverage = vec![0; gfa.segments.len()];
     for_each_line_in_file(&args.alignments, |l: &str| { for_each_step(l, |i| { coverage[i-1] += 1; }); });
-    print!("sample");
+    print!("#sample");
     for n in 1..gfa.segments.len()+1 {
         print!("\tnode.{}", n);
     }
