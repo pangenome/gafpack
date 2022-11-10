@@ -32,6 +32,9 @@ struct Args {
     /// Input GAF alignment file
     #[arg(short, long)]
     alignments: String,
+    /// Scale coverage values by node length
+    #[arg(short, long)]
+    len_scale: bool,
 }
 
 fn main() {
@@ -52,10 +55,16 @@ fn main() {
     for n in 1..gfa.segments.len()+1 {
         print!("\tnode.{}", n);
     }
-    print!("\n");
+    println!();
     print!("{}", args.alignments);
-    for v in coverage {
-        print!("\t{}", v);
+    if args.len_scale {
+        for (i, v) in coverage.into_iter().enumerate() {
+            print!("\t{}", v * gfa.segments[i].sequence.len());
+        }
+    } else {
+        for v in coverage {
+            print!("\t{}", v);
+        }
     }
-    print!("\n");
+    println!();
 }
