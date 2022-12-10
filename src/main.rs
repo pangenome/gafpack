@@ -14,13 +14,14 @@ fn for_each_line_in_file(filename: &str, mut callback: impl FnMut(&str)) {
 fn for_each_step(line: &str,
                  mut callback: impl FnMut(usize,usize),
                  mut get_node_len: impl FnMut(usize) -> usize) {
+    //eprintln!("{}", line);
     let walk = line.split('\t').nth(5).unwrap();
-    let target_start = line.split('\t').nth(7).unwrap().parse::<usize>().unwrap();
-    let target_end = line.split('\t').nth(8).unwrap().parse::<usize>().unwrap();
-    let target_len = target_end - target_start;
-    //println!("{}", line);
-    //println!("target_len = {}", target_len);
     if walk != "*" {
+        //eprintln!("oheunotoeunthoue");
+        let target_start = line.split('\t').nth(7).unwrap().parse::<usize>().unwrap();
+        let target_end = line.split('\t').nth(8).unwrap().parse::<usize>().unwrap();
+        let mut target_len = target_end - target_start;
+        //eprintln!("target_len = {}", target_len);
         let fields = line.split('\t').nth(5).unwrap()
             .split(|c| { c == '<' || c == '>' })
             .filter(|s| { !s.is_empty() })
@@ -29,33 +30,35 @@ fn for_each_step(line: &str,
             .collect::<Vec<(usize,usize)>>();
         let mut seen: usize = 0;
         let fields_len = fields.as_slice().len();
-        //println!("fields len = {}", fields_len);
+        //eprintln!("fields len = {}", fields_len);
         for (i, j) in fields {
             let mut len = get_node_len(j);
-            //println!("node {} len = {}", j, len);
+            //eprintln!("node {} len = {}", j, len);
             if i == 0 {
-                //println!("on first step {} {} {}", len, target_start, seen);
+                //eprintln!("on first step {} {} {}", len, target_start, seen);
                 assert!(len >= target_start);
                 len -= target_start;
             }
             if i == fields_len-1 {
-                //println!("on last step {} {} {}", len, target_end, seen);
+                //eprintln!("on last step {} {} {}", len, target_end, seen);
                 if target_len < seen {
-                    eprintln!("{}", line);
-                    eprintln!("on last step {} {} {}", len, target_len, seen);
-                    assert!(false);
+                    target_len = seen;
+                    //eprintln!("{}", line);
+                    //eprintln!("on last step {} {} {}", len, target_len, seen);
+                    //assert!(false);
                 }
                 len = target_len - seen;
             }
             if i == fields_len {
                 assert!(false);
             }
-            //println!("node {} adj len = {}", j, len);
+            //eprintln!("node {} adj len = {}", j, len);
             seen += len;
             callback(j, len);
         }
-        //println!("seen = {}", seen);
+        //eprintln!("seen = {}", seen);
     }
+    //eprintln!("at end");
 }
 
 /// Project a GAF alignment file into coverage over GFA graph nodes
