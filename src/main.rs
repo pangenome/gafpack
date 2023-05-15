@@ -74,6 +74,9 @@ struct Args {
     /// Scale coverage values by node length
     #[arg(short, long)]
     len_scale: bool,
+    /// Emit graph coverage vector in a single column
+    #[arg(short, long)]
+    coverage_column: bool,
 }
 
 fn main() {
@@ -95,14 +98,23 @@ fn main() {
             l,
             |i, j| { coverage[i-1] += j; },
             |id| { gfa.segments[id-1].sequence.len() }); });
-    print!("#sample");
-    for n in 1..gfa.segments.len()+1 {
-        print!("\tnode.{}", n);
+
+    if (args.coverage_column) {
+        println!("##sample: {}", args.alignments);
+        println!("#coverage");
+        for (i, v) in coverage.into_iter().enumerate() {
+            println!("{}", v as f64 / gfa.segments[i].sequence.len() as f64);
+        }
+    } else {
+        print!("#sample");
+        for n in 1..gfa.segments.len()+1 {
+            print!("\tnode.{}", n);
+        }
+        println!();
+        print!("{}", args.alignments);
+        for (i, v) in coverage.into_iter().enumerate() {
+            print!("\t{}", v as f64 / gfa.segments[i].sequence.len() as f64);
+        }
+        println!();
     }
-    println!();
-    print!("{}", args.alignments);
-    for (i, v) in coverage.into_iter().enumerate() {
-        print!("\t{}", v as f64 / gfa.segments[i].sequence.len() as f64);
-    }
-    println!();
 }
