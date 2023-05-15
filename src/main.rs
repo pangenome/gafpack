@@ -99,11 +99,11 @@ fn main() {
             |i, j| { coverage[i-1] += j; },
             |id| { gfa.segments[id-1].sequence.len() }); });
 
-    if (args.coverage_column) {
+    if args.coverage_column {
         println!("##sample: {}", args.alignments);
         println!("#coverage");
         for (i, v) in coverage.into_iter().enumerate() {
-            println!("{}", v as f64 / gfa.segments[i].sequence.len() as f64);
+            println!("{}", if args.len_scale {v as f64  / gfa.segments[i].sequence.len() as f64} else {v as f64});
         }
     } else {
         print!("#sample");
@@ -113,7 +113,7 @@ fn main() {
         println!();
         print!("{}", args.alignments);
         for (i, v) in coverage.into_iter().enumerate() {
-            print!("\t{}", v as f64 / gfa.segments[i].sequence.len() as f64);
+            print!("\t{}", if args.len_scale {v as f64  / gfa.segments[i].sequence.len() as f64} else {v as f64});
         }
         println!();
     }
