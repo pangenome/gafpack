@@ -3,6 +3,7 @@ use gfa::gfa::GFA;
 use std::fs::File;
 use std::io::{prelude::*, BufReader};
 use std::collections::BTreeMap;
+use log::{error};
 
 fn for_each_line_in_file(filename: &str, mut callback: impl FnMut(&str)) {
     let file = File::open(filename).unwrap();
@@ -100,9 +101,17 @@ struct Args {
     coverage_column: bool,
 }
 
-fn main() {   
+fn main() {
+    env_logger::init();
+    
     let args = Args::parse();
     //println!("Hello {}!", args.graph);
+
+    // Check if at least one of node_coverage or edge_coverage is specified
+    if !args.node_coverage && !args.edge_coverage {
+        error!("At least one of --node-coverage or --edge-coverage must be specified.");
+        std::process::exit(1);
+    }
 
     let gfa = {
         let parser = gfa::parser::GFAParser::default();
