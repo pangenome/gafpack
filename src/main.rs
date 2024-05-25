@@ -15,8 +15,8 @@ fn for_each_line_in_file(filename: &str, mut callback: impl FnMut(&str)) {
 
 fn for_each_step(
     line: &str,
-    mut node_callback: impl FnMut(usize, usize),
-    mut edge_callback: impl FnMut(usize, usize),
+    mut node_callback: Option<impl FnMut(usize, usize)>,
+    mut edge_callback: Option<impl FnMut(usize, usize)>,
     mut get_node_len: impl FnMut(usize) -> usize,
 ) {
     //eprintln!("{}", line);
@@ -62,13 +62,19 @@ fn for_each_step(
             }
             //eprintln!("node {} adj len = {}", j, len);
             seen += len;
-            node_callback(j, len);
+            if let Some(ref mut cb) = node_callback {
+                cb(j, len);
+            }
             if i < fields_len - 1 {
                 let next_j = fields[i + 1].parse::<usize>().unwrap();
                 if orientations[i] == '>' {
-                    edge_callback(j, next_j);
+                    if let Some(ref mut cb) = edge_callback {
+                        cb(j, next_j);
+                    }
                 } else {
-                    edge_callback(next_j, j);
+                    if let Some(ref mut cb) = edge_callback {
+                        cb(next_j, j);
+                    }
                 }
             }
         }
@@ -124,22 +130,41 @@ fn main() {
     //for_each_line_in_file(&args.alignments, |_l: &str| { lines += 1 });
     //println!("{} has {} nodes", args.alignments, lines);
     
-    let mut node_coverage = vec![0; gfa.segments.len()];
-    
-    let mut edge_coverage: BTreeMap<(usize, usize), usize> = BTreeMap::new();
-    // Initialize edge_coverage with all possible edges in the graph
-    for edge in &gfa.links {
-        edge_coverage.entry((edge.from_segment-1 as usize, edge.to_segment-1 as usize)).or_insert(0);
-    }
+    let mut node_coverage = if args.node_coverage {
+        Some(vec![0; gfa.segments.len()])
+    } else {
+        None
+    };
+
+    let mut edge_coverage = if args.edge_coverage {
+        let mut ec = BTreeMap::new();
+        for link in &gfa.links {
+            ec.entry((link.from_segment - 1, link.to_segment - 1)).or_insert(0);
+        }
+        Some(ec)
+    } else {
+        None
+    };
 
     for_each_line_in_file(&args.alignments, |l: &str| {
         // get the start pos
         for_each_step(
             l,
-            |i, len| { node_coverage[i-1] += len; },
-            |from, to| {
-                *edge_coverage.entry((from - 1, to - 1)).or_insert(0) += 1;
-            },
+            node_coverage.as_mut().map(|nc| {
+                move |i, len| {
+                    nc[i - 1] += len;
+                }
+            }),
+            edge_coverage.as_mut().map(|ec| {
+                move |from, to| {
+                    if !ec.contains_key(&(from - 1, to - 1)) {
+                        error!("Edge from {} to {} does not exist in the graph.", from, to);
+                        std::process::exit(1);
+                    } else {
+                        *ec.entry((from - 1, to - 1)).or_insert(0) += 1;
+                    }
+                }
+            }),
             |id| { gfa.segments[id-1].sequence.len() });
         });
 
@@ -148,50 +173,49 @@ fn main() {
         
         let mut header = String::from("#coverage");
         let mut header_parts = Vec::new();
-        if args.node_coverage {
-            header_parts.push(format!("num.nodes: {}", gfa.segments.len()));
+        if let Some(ref nc) = node_coverage {
+            header_parts.push(format!("num.nodes: {}", nc.len()));
         }
-        if args.edge_coverage {
-            header_parts.push(format!("num.edges: {}", edge_coverage.len()));
+        if let Some(ref ec) = edge_coverage {
+            header_parts.push(format!("num.edges: {}", ec.len()));
         }
         if !header_parts.is_empty() {
             header.push_str(&format!(" ({})", header_parts.join(", ")));
         }
         println!("{}", header);
         
-        if args.node_coverage {
-            for (i, v) in node_coverage.into_iter().enumerate() {
-                println!("{}", if args.len_scale {v as f64  / gfa.segments[i].sequence.len() as f64} else {v as f64});
+        if let Some(nc) = node_coverage {
+            for (i, v) in nc.into_iter().enumerate() {
+                println!("{}", if args.len_scale { v as f64 / gfa.segments[i].sequence.len() as f64 } else { v as f64 });
             }
         }
         
-        if args.edge_coverage {
-            for ((_, _), v) in edge_coverage.iter() {
-                //println!("{} -> {}: {}", from + 1, to + 1, v);
+        if let Some(ec) = edge_coverage {
+            for ((_, _), v) in ec.iter() {
                 println!("{}", v);
             }
         }
     } else {
         print!("#sample");
-        if args.node_coverage {
+        if let Some(_) = node_coverage {
             for n in 1..=gfa.segments.len() {
                 print!("\tnode.{}", n);
             }
         }
-        if args.edge_coverage {
-            for ((from, to), _) in edge_coverage.iter() {
-                print!("\tedge.{}.{}", from + 1, to + 1);
+        if let Some(_) = edge_coverage {
+            for ((from, to), _) in edge_coverage.as_ref().unwrap().iter() {
+                print!("\tedge.{}>{}", from + 1, to + 1);
             }
         }
         println!();
         print!("{}", args.alignments);
-        if args.node_coverage {
-            for (i, v) in node_coverage.into_iter().enumerate() {
-                print!("\t{}", if args.len_scale {v as f64  / gfa.segments[i].sequence.len() as f64} else {v as f64});
+        if let Some(nc) = node_coverage {
+            for (i, v) in nc.into_iter().enumerate() {
+                print!("\t{}", if args.len_scale { v as f64 / gfa.segments[i].sequence.len() as f64 } else { v as f64 });
             }
         }
-        if args.edge_coverage {
-            for ((_, _), v) in edge_coverage.iter() {
+        if let Some(ec) = edge_coverage {
+            for ((_, _), v) in ec.iter() {
                 print!("\t{}", v);
             }
         }
