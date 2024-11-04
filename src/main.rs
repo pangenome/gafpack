@@ -3,6 +3,11 @@ use gfa::gfa::GFA;
 use std::fs::File;
 use std::io::{prelude::*, BufReader};
 
+/// Iterates through each line in a file, applying the provided callback function
+/// 
+/// # Arguments
+/// * `filename` - Path to the file to read
+/// * `callback` - Function to call for each line
 fn for_each_line_in_file(filename: &str, mut callback: impl FnMut(&str)) {
     let file = File::open(filename).unwrap();
     let reader = BufReader::new(file);
@@ -11,6 +16,18 @@ fn for_each_line_in_file(filename: &str, mut callback: impl FnMut(&str)) {
     }
 }
 
+/// Process each step in a GAF alignment line, calculating coverage for graph nodes
+/// 
+/// # Arguments
+/// * `line` - A GAF format alignment line
+/// * `callback` - Function called for each node with (node_id, coverage_length)
+/// * `get_node_len` - Function to get the length of a node by its ID
+/// 
+/// # Details
+/// Parses GAF alignment lines to extract node coverage information:
+/// - Handles both forward (>) and reverse (<) node traversals
+/// - Adjusts coverage for partial node alignments at path ends
+/// - Accumulates coverage across multi-node paths
 fn for_each_step(line: &str,
                  mut callback: impl FnMut(usize,usize),
                  mut get_node_len: impl FnMut(usize) -> usize) {
@@ -88,8 +105,8 @@ fn main() {
         gfa
     };
     //println!("{} has {} nodes", args.graph, gfa.segments.len());
-    let mut lines = 0;
-    for_each_line_in_file(&args.alignments, |_l: &str| { lines += 1 });
+    //let mut lines = 0;
+    //for_each_line_in_file(&args.alignments, |_l: &str| { lines += 1 });
     //println!("{} has {} nodes", args.alignments, lines);
     let mut coverage = vec![0; gfa.segments.len()];
     for_each_line_in_file(&args.alignments, |l: &str| {
@@ -97,7 +114,9 @@ fn main() {
         for_each_step(
             l,
             |i, j| { coverage[i-1] += j; },
-            |id| { gfa.segments[id-1].sequence.len() }); });
+            |id| { gfa.segments[id-1].sequence.len()
+        });
+    });
 
     if args.coverage_column {
         println!("##sample: {}", args.alignments);
