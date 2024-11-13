@@ -112,7 +112,7 @@ fn main() {
     //let mut lines = 0;
     //for_each_line_in_file(&args.alignments, |_l: &str| { lines += 1 });
     //println!("{} has {} nodes", args.alignments, lines);
-    let mut coverage = vec![0; gfa.segments.len()];
+    let mut coverage : Vec<f64> = vec![0.0; gfa.segments.len()];
     
     if args.weight_queries {
         // First pass: count query occurrences
@@ -133,7 +133,7 @@ fn main() {
             
             for_each_step(
                 l,
-                |i, j| { coverage[i-1] += (j as f64 / *count as f64) as usize; },
+                |i, j| { coverage[i-1] += j as f64 / *count as f64; },
                 |id| { gfa.segments[id-1].sequence.len()
             });
         });
@@ -142,7 +142,7 @@ fn main() {
         for_each_line_in_file(&args.alignments, |l: &str| {
             for_each_step(
                 l,
-                |i, j| { coverage[i-1] += j; },
+                |i, j| { coverage[i-1] += j as f64; },
                 |id| { gfa.segments[id-1].sequence.len()
             });
         });
