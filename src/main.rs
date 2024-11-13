@@ -95,6 +95,9 @@ struct Args {
     /// Emit graph coverage vector in a single column
     #[arg(short, long)]
     coverage_column: bool,
+    /// Weight coverage by query group occurrences
+    #[arg(short = 'w', long)]
+    weight_queries: bool,
 }
 
 fn main() {
@@ -109,29 +112,41 @@ fn main() {
     //let mut lines = 0;
     //for_each_line_in_file(&args.alignments, |_l: &str| { lines += 1 });
     //println!("{} has {} nodes", args.alignments, lines);
-    // First pass: count query occurrences
-    let mut query_counts: HashMap<String, usize> = HashMap::new();
-    for_each_line_in_file(&args.alignments, |l: &str| {
-        let fields: Vec<&str> = l.split('\t').collect();
-        if fields.len() >= 4 {
-            let query_key = format!("{}:{}:{}", fields[0], fields[2], fields[3]);
-            *query_counts.entry(query_key).or_insert(0) += 1;
-        }
-    });
-
-    // Second pass: calculate coverage with query count adjustment
     let mut coverage = vec![0; gfa.segments.len()];
-    for_each_line_in_file(&args.alignments, |l: &str| {
-        let fields: Vec<&str> = l.split('\t').collect();
-        let query_key = format!("{}:{}:{}", fields[0], fields[2], fields[3]);
-        let count = query_counts.get(&query_key).unwrap_or(&1);
-        
-        for_each_step(
-            l,
-            |i, j| { coverage[i-1] += (j as f64 / *count as f64) as usize; },
-            |id| { gfa.segments[id-1].sequence.len()
+    
+    if args.weight_queries {
+        // First pass: count query occurrences
+        let mut query_counts: HashMap<String, usize> = HashMap::new();
+        for_each_line_in_file(&args.alignments, |l: &str| {
+            let fields: Vec<&str> = l.split('\t').collect();
+            if fields.len() >= 4 {
+                let query_key = format!("{}:{}:{}", fields[0], fields[2], fields[3]);
+                *query_counts.entry(query_key).or_insert(0) += 1;
+            }
         });
-    });
+
+        // Second pass: calculate coverage with query count adjustment
+        for_each_line_in_file(&args.alignments, |l: &str| {
+            let fields: Vec<&str> = l.split('\t').collect();
+            let query_key = format!("{}:{}:{}", fields[0], fields[2], fields[3]);
+            let count = query_counts.get(&query_key).unwrap_or(&1);
+            
+            for_each_step(
+                l,
+                |i, j| { coverage[i-1] += (j as f64 / *count as f64) as usize; },
+                |id| { gfa.segments[id-1].sequence.len()
+            });
+        });
+    } else {
+        // Single pass without weighting
+        for_each_line_in_file(&args.alignments, |l: &str| {
+            for_each_step(
+                l,
+                |i, j| { coverage[i-1] += j; },
+                |id| { gfa.segments[id-1].sequence.len()
+            });
+        });
+    }
 
     if args.coverage_column {
         println!("##sample: {}", args.alignments);

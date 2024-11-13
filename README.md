@@ -38,6 +38,7 @@ gafpack -g graph.gfa -a alignments.gaf >coverage.tsv
 - `-a, --alignments`: Input GAF alignment file (required) 
 - `-l, --len-scale`: Scale coverage values by node length
 - `-c, --coverage-column`: Output coverage vector in single column format
+- `-w, --weight-queries`: Weight coverage by query group occurrences
 
 ### Output Formats
 
