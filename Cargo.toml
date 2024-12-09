@@ -9,3 +9,4 @@ authors = ["Erik Garrison <erik.garrison@gmail.com>"]
 [dependencies]
 clap = { version = "4.0.9", features = ["derive"] }
 gfa = "0.10.1"
+niffler = "2.5.0"

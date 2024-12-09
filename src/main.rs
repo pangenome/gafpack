@@ -2,6 +2,7 @@ use clap::Parser;
 use gfa::gfa::GFA;
 use std::fs::File;
 use std::io::{prelude::*, BufReader};
+use niffler::{get_reader, compression};
 use std::collections::HashMap;
 
 /// Iterates through each line in a file, applying the provided callback function
@@ -11,8 +12,9 @@ use std::collections::HashMap;
 /// * `callback` - Function to call for each line
 fn for_each_line_in_file(filename: &str, mut callback: impl FnMut(&str)) {
     let file = File::open(filename).unwrap();
-    let reader = BufReader::new(file);
-    for line in reader.lines() {
+    let (reader, _compression) = get_reader(file).unwrap();
+    let buf_reader = BufReader::new(reader);
+    for line in buf_reader.lines() {
         callback(&line.unwrap());
     }
 }
