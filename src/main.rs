@@ -11,8 +11,9 @@ use std::collections::HashMap;
 /// * `callback` - Function to call for each line
 fn for_each_line_in_file(filename: &str, mut callback: impl FnMut(&str)) {
     let file = File::open(filename).unwrap();
-    let reader = BufReader::new(file);
-    for line in reader.lines() {
+    let (reader, _compression) = niffler::get_reader(Box::new(file)).unwrap();
+    let buf_reader = BufReader::new(reader);
+    for line in buf_reader.lines() {
         callback(&line.unwrap());
     }
 }
@@ -84,11 +85,11 @@ fn for_each_step(line: &str,
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Input GFA pangenome graph file
-    #[arg(short, long)]
-    graph: String,
+    #[arg(long)]
+    gfa: String,
     /// Input GAF alignment file
     #[arg(short, long)]
-    alignments: String,
+    gaf: String,
     /// Scale coverage values by node length
     #[arg(short, long)]
     len_scale: bool,
@@ -102,22 +103,22 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    //println!("Hello {}!", args.graph);
+    //println!("Hello {}!", args.gfa);
     let gfa = {
         let parser = gfa::parser::GFAParser::default();
-        let gfa: GFA<usize, ()> = parser.parse_file(&args.graph).unwrap();
+        let gfa: GFA<usize, ()> = parser.parse_file(&args.gfa).unwrap();
         gfa
     };
-    //println!("{} has {} nodes", args.graph, gfa.segments.len());
+    //println!("{} has {} nodes", args.gfa, gfa.segments.len());
     //let mut lines = 0;
-    //for_each_line_in_file(&args.alignments, |_l: &str| { lines += 1 });
-    //println!("{} has {} nodes", args.alignments, lines);
+    //for_each_line_in_file(&args.gaf, |_l: &str| { lines += 1 });
+    //println!("{} has {} nodes", args.gaf, lines);
     let mut coverage : Vec<f64> = vec![0.0; gfa.segments.len()];
     
     if args.weight_queries {
         // First pass: count query occurrences
         let mut query_counts: HashMap<String, usize> = HashMap::new();
-        for_each_line_in_file(&args.alignments, |l: &str| {
+        for_each_line_in_file(&args.gaf, |l: &str| {
             let fields: Vec<&str> = l.split('\t').collect();
             if fields.len() >= 4 {
                 let query_key = format!("{}:{}:{}", fields[0], fields[2], fields[3]);
@@ -126,7 +127,7 @@ fn main() {
         });
 
         // Second pass: calculate coverage with query count adjustment
-        for_each_line_in_file(&args.alignments, |l: &str| {
+        for_each_line_in_file(&args.gaf, |l: &str| {
             let fields: Vec<&str> = l.split('\t').collect();
             let query_key = format!("{}:{}:{}", fields[0], fields[2], fields[3]);
             let count = query_counts.get(&query_key).unwrap_or(&1);
@@ -139,7 +140,7 @@ fn main() {
         });
     } else {
         // Single pass without weighting
-        for_each_line_in_file(&args.alignments, |l: &str| {
+        for_each_line_in_file(&args.gaf, |l: &str| {
             for_each_step(
                 l,
                 |i, j| { coverage[i-1] += j as f64; },
@@ -149,7 +150,7 @@ fn main() {
     }
 
     if args.coverage_column {
-        println!("##sample: {}", args.alignments);
+        println!("##sample: {}", args.gaf);
         println!("#coverage");
         for (i, v) in coverage.into_iter().enumerate() {
             println!("{}", if args.len_scale {v as f64  / gfa.segments[i].sequence.len() as f64} else {v as f64});
@@ -160,7 +161,7 @@ fn main() {
             print!("\tnode.{}", n);
         }
         println!();
-        print!("{}", args.alignments);
+        print!("{}", args.gaf);
         for (i, v) in coverage.into_iter().enumerate() {
             print!("\t{}", if args.len_scale {v as f64  / gfa.segments[i].sequence.len() as f64} else {v as f64});
         }

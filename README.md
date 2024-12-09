@@ -1,71 +1,60 @@
 # gafpack
 
-A Rust tool to convert alignments from pangenome variation graphs into coverage maps, facilitating haplotype-based genotyping analysis.
+Calculate node coverage from GAF alignments to GFA variation graphs.
 
-## Description
-
-gafpack processes Graph Alignment Format (GAF) files against their corresponding Graph Fragment Assembly (GFA) graphs to generate coverage statistics. This is particularly useful for:
+This is useful for:
 - Analyzing read coverage across pangenome variation graphs
 - Supporting haplotype-based genotyping workflows
 - Quantifying alignment distribution across graph nodes
 
-## Requirements
+## Install
 
-- Rust toolchain (cargo)
-- Input files:
-  - GFA format graph file
-  - GAF format alignment file
-
-## Installation
-
-Use `cargo` to build and install:
+Requires Rust 2021 edition or later. Install using:
 
 ```bash
-cargo install --force --path .
+cargo install --git https://github.com/pangenome/gafpack
+```
+
+Or build from source:
+
+```bash
+git clone https://github.com/pangenome/gafpack
+cd gafpack
+cargo build --release
 ```
 
 ## Usage
 
-Basic usage requires a graph file (GFA) and alignment file (GAF):
+Basic usage:
 
 ```bash
-gafpack -g graph.gfa -a alignments.gaf >coverage.tsv
+gafpack --gfa graph.gfa --gaf alignments.gaf > coverage.tsv
 ```
 
-### Options
+## Options
 
-- `-g, --graph`: Input GFA pangenome graph file (required)
-- `-a, --alignments`: Input GAF alignment file (required) 
-- `-l, --len-scale`: Scale coverage values by node length
-- `-c, --coverage-column`: Output coverage vector in single column format
-- `-w, --weight-queries`: Weight coverage by query group occurrences
+- `--gfa`: Input GFA graph file (required)
+- `-g, --gaf`: Input GAF alignment file (required) 
+- `-l, --len-scale`: Scale coverage by node length
+- `-c, --coverage-column`: Output coverage vector as single column
+- `-w, --weight-queries`: Weight coverage by query occurrences
 
-### Output Formats
+## Output Formats
 
 1. Default (tabular):
-   ```
-   #sample        node.1  node.2  node.3  ...
-   alignments.gaf 1.5     2.0     0.5     ...
-   ```
 
-2. Column format (-c flag):
-   ```
-   ##sample: alignments.gaf
-   #coverage
-   1.5
-   2.0
-   0.5
-   ...
-   ```
-
-## Examples
-
-Scale coverage by node length:
-```bash
-gafpack -g graph.gfa -a reads.gaf --len-scale >scaled_coverage.tsv
+```
+#sample        node.1  node.2  node.3  ...
+alignments.gaf 1.5     2.0     0.5     ...
 ```
 
-Get column format output:
-```bash
-gafpack -g graph.gfa -a reads.gaf --coverage-column >coverage_vector.tsv
+2. Column format (with `-c, --coverage-column`):
+
+```
+##sample: alignments.gaf
+#coverage
+1.5
+2.0
+0.5
+...
 ```
