@@ -119,17 +119,13 @@ fn main() {
         // First pass: count query occurrences
         let mut query_counts: HashMap<String, usize> = HashMap::new();
         for_each_line_in_file(&args.gaf, |l: &str| {
-            let fields: Vec<&str> = l.split('\t').collect();
-            if fields.len() >= 4 {
-                let query_key = format!("{}:{}:{}", fields[0], fields[2], fields[3]);
-                *query_counts.entry(query_key).or_insert(0) += 1;
-            }
+            let query_key = l.split('\t').next().unwrap().to_string();
+            *query_counts.entry(query_key).or_insert(0) += 1;
         });
 
         // Second pass: calculate coverage with query count adjustment
         for_each_line_in_file(&args.gaf, |l: &str| {
-            let fields: Vec<&str> = l.split('\t').collect();
-            let query_key = format!("{}:{}:{}", fields[0], fields[2], fields[3]);
+            let query_key = l.split('\t').next().unwrap().to_string();
             let count = query_counts.get(&query_key).unwrap_or(&1);
             
             for_each_step(
