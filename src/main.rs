@@ -39,7 +39,7 @@ fn for_each_step(line: &str,
         //eprintln!("oheunotoeunthoue");
         let target_start = line.split('\t').nth(7).unwrap().parse::<usize>().unwrap();
         let target_end = line.split('\t').nth(8).unwrap().parse::<usize>().unwrap();
-        let mut target_len = target_end - target_start;
+        let target_len = target_end - target_start;
         //eprintln!("target_len = {}", target_len);
         let fields = line.split('\t').nth(5).unwrap()
             .split(|c| { c == '<' || c == '>' })
