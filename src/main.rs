@@ -60,12 +60,7 @@ fn for_each_step(line: &str,
             }
             if i == fields_len-1 {
                 //eprintln!("on last step {} {} {}", len, target_end, seen);
-                if target_len < seen {
-                    target_len = seen;
-                    //eprintln!("{}", line);
-                    //eprintln!("on last step {} {} {}", len, target_len, seen);
-                    //assert!(false);
-                }
+                assert!(target_len >= seen);
                 len = target_len - seen;
             }
             if i == fields_len {
