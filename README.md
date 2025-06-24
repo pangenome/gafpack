@@ -9,7 +9,7 @@ This is useful for:
 
 ## Install
 
-Requires Rust 2021 edition or later. Install using:
+Install using:
 
 ```bash
 cargo install --git https://github.com/pangenome/gafpack
@@ -31,6 +31,8 @@ Basic usage:
 gafpack --gfa graph.gfa --gaf alignments.gaf > coverage.tsv
 ```
 
+The GFA `file` can be gzip/bgzip compressed (`.gz` or `.bgz`).
+
 ## Options
 
 - `--gfa`: Input GFA graph file (required)
@@ -41,14 +43,14 @@ gafpack --gfa graph.gfa --gaf alignments.gaf > coverage.tsv
 
 ## Output Formats
 
-1. Default (tabular):
+### Default (tabular):
 
 ```
 #sample        node.1  node.2  node.3  ...
 alignments.gaf 1.5     2.0     0.5     ...
 ```
 
-2. Column format (with `-c, --coverage-column`):
+### Column format (with `-c, --coverage-column`):
 
 ```
 ##sample: alignments.gaf
