@@ -8,5 +8,5 @@ authors = ["Erik Garrison <erik.garrison@gmail.com>"]
 
 [dependencies]
 clap = { version = "4.5.2", features = ["derive"] }
-gfa = "0.10.1"
 niffler = "2.6.0"
+flate2 = "1.1.2"
