@@ -2,11 +2,11 @@
 name = "gafpack"
 version = "0.1.2"
 edition = "2021"
-authors = ["Erik Garrison <erik.garrison@gmail.com>"]
+authors = ["Erik Garrison <erik.garrison@gmail.com>", "Andrea Guarracino <aguarra1@uthsc.edu>"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap = { version = "4.5.2", features = ["derive"] }
+clap = { version = "4.5.40", features = ["derive"] }
 niffler = "2.6.0"
 flate2 = "1.1.2"
