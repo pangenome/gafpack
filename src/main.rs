@@ -1,12 +1,12 @@
 use clap::Parser;
+use flate2::read::GzDecoder;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{prelude::*, BufReader};
-use std::collections::HashMap;
 use std::path::Path;
-use flate2::read::GzDecoder;
 
 /// Iterates through each line in a file, applying the provided callback function
-/// 
+///
 /// # Arguments
 /// * `filename` - Path to the file to read
 /// * `callback` - Function to call for each line
@@ -20,20 +20,22 @@ fn for_each_line_in_file(filename: &str, mut callback: impl FnMut(&str)) {
 }
 
 /// Process each step in a GAF alignment line, calculating coverage for graph nodes
-/// 
+///
 /// # Arguments
 /// * `line` - A GAF format alignment line
 /// * `callback` - Function called for each node with (node_id, coverage_length)
 /// * `get_node_len` - Function to get the length of a node by its ID
-/// 
+///
 /// # Details
 /// Parses GAF alignment lines to extract node coverage information:
 /// - Handles both forward (>) and reverse (<) node traversals
 /// - Adjusts coverage for partial node alignments at path ends
 /// - Accumulates coverage across multi-node paths
-fn for_each_step(line: &str,
-                 mut callback: impl FnMut(usize,usize),
-                 mut get_node_len: impl FnMut(usize) -> usize) {
+fn for_each_step(
+    line: &str,
+    mut callback: impl FnMut(usize, usize),
+    mut get_node_len: impl FnMut(usize) -> usize,
+) {
     //eprintln!("{}", line);
     let walk = line.split('\t').nth(5).unwrap();
     if walk != "*" {
@@ -42,12 +44,15 @@ fn for_each_step(line: &str,
         let target_end = line.split('\t').nth(8).unwrap().parse::<usize>().unwrap();
         let target_len = target_end - target_start;
         //eprintln!("target_len = {}", target_len);
-        let fields = line.split('\t').nth(5).unwrap()
-            .split(|c| { c == '<' || c == '>' })
-            .filter(|s| { !s.is_empty() })
-            .map(|s| { s.parse::<usize>().unwrap() })
+        let fields = line
+            .split('\t')
+            .nth(5)
+            .unwrap()
+            .split(|c| c == '<' || c == '>')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.parse::<usize>().unwrap())
             .enumerate()
-            .collect::<Vec<(usize,usize)>>();
+            .collect::<Vec<(usize, usize)>>();
         let mut seen: usize = 0;
         let fields_len = fields.as_slice().len();
         //eprintln!("fields len = {}", fields_len);
@@ -59,7 +64,7 @@ fn for_each_step(line: &str,
                 assert!(len >= target_start);
                 len -= target_start;
             }
-            if i == fields_len-1 {
+            if i == fields_len - 1 {
                 //eprintln!("on last step {} {} {}", len, target_end, seen);
                 assert!(target_len >= seen);
                 len = target_len - seen;
@@ -79,8 +84,9 @@ fn for_each_step(line: &str,
 /// Create a reader that handles compressed files
 fn create_reader(path: &Path) -> std::io::Result<Box<dyn BufRead>> {
     let file = File::open(path)?;
-    
-    if path.extension()
+
+    if path
+        .extension()
         .is_some_and(|ext| ext == "gz" || ext == "bgz")
     {
         let decoder = GzDecoder::new(file);
@@ -114,7 +120,7 @@ fn parse_gfa(gfa_path: &str) -> std::io::Result<Vec<Segment>> {
         }
 
         let line_str = line.trim();
-        
+
         // Only process segment lines
         if !line_str.starts_with('S') {
             continue;
@@ -141,7 +147,7 @@ fn parse_gfa(gfa_path: &str) -> std::io::Result<Vec<Segment>> {
 
     // Sort segments by ID to ensure they're in order
     segments.sort_by_key(|s| s.id);
-    
+
     Ok(segments)
 }
 
@@ -168,20 +174,20 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    
+
     // Parse GFA file
     let segments = parse_gfa(&args.gfa).unwrap();
     let num_segments = segments.len();
-    
+
     // Create a map from segment ID to index for fast lookup
     let segment_id_to_index: HashMap<usize, usize> = segments
         .iter()
         .enumerate()
         .map(|(idx, seg)| (seg.id, idx))
         .collect();
-    
+
     let mut coverage: Vec<f64> = vec![0.0; num_segments];
-    
+
     if args.weight_queries {
         // First pass: count query occurrences
         let mut query_counts: HashMap<String, usize> = HashMap::new();
@@ -198,19 +204,20 @@ fn main() {
             let fields: Vec<&str> = l.split('\t').collect();
             let query_key = format!("{}:{}:{}", fields[0], fields[2], fields[3]);
             let count = query_counts.get(&query_key).unwrap_or(&1);
-            
+
             for_each_step(
                 l,
-                |node_id, len| { 
+                |node_id, len| {
                     if let Some(&idx) = segment_id_to_index.get(&node_id) {
                         coverage[idx] += len as f64 / *count as f64;
                     }
                 },
                 |node_id| {
-                    segment_id_to_index.get(&node_id)
+                    segment_id_to_index
+                        .get(&node_id)
                         .map(|&idx| segments[idx].sequence.len())
                         .unwrap_or(0)
-                }
+                },
             );
         });
     } else {
@@ -224,10 +231,11 @@ fn main() {
                     }
                 },
                 |node_id| {
-                    segment_id_to_index.get(&node_id)
+                    segment_id_to_index
+                        .get(&node_id)
                         .map(|&idx| segments[idx].sequence.len())
                         .unwrap_or(0)
-                }
+                },
             );
         });
     }
@@ -236,11 +244,14 @@ fn main() {
         println!("##sample: {}", args.gaf);
         println!("#coverage");
         for (i, v) in coverage.into_iter().enumerate() {
-            println!("{}", if args.len_scale {
-                v / segments[i].sequence.len() as f64
-            } else {
-                v
-            });
+            println!(
+                "{}",
+                if args.len_scale {
+                    v / segments[i].sequence.len() as f64
+                } else {
+                    v
+                }
+            );
         }
     } else {
         print!("#sample");
@@ -250,11 +261,14 @@ fn main() {
         println!();
         print!("{}", args.gaf);
         for (i, v) in coverage.into_iter().enumerate() {
-            print!("\t{}", if args.len_scale {
-                v / segments[i].sequence.len() as f64
-            } else {
-                v
-            });
+            print!(
+                "\t{}",
+                if args.len_scale {
+                    v / segments[i].sequence.len() as f64
+                } else {
+                    v
+                }
+            );
         }
         println!();
     }
