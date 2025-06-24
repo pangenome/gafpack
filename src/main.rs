@@ -98,19 +98,15 @@ fn create_reader(path: &Path) -> std::io::Result<Box<dyn BufRead>> {
     }
 }
 
-/// Simple struct to hold segment information
-struct Segment {
-    id: usize,
-    sequence: String,
-}
-
-/// Parse GFA file and extract segments
-fn parse_gfa(gfa_path: &str) -> std::io::Result<Vec<Segment>> {
+/// Parse GFA file and extract segment information
+/// Returns (segment_lengths, min_id) where segment_lengths[id - min_id] gives the length
+fn parse_gfa(gfa_path: &str) -> std::io::Result<(Vec<usize>, usize)> {
     let path = Path::new(gfa_path);
     let mut reader = create_reader(path)?;
     let mut line = String::new();
-    let mut segments = Vec::new();
-    let mut segment_map = HashMap::new();
+    let mut segments_map = HashMap::new();
+    let mut min_id = usize::MAX;
+    let mut max_id = 0;
 
     loop {
         line.clear();
@@ -138,24 +134,27 @@ fn parse_gfa(gfa_path: &str) -> std::io::Result<Vec<Segment>> {
 
         // Parse segment ID
         let id = id_str.parse::<usize>().unwrap();
-        segment_map.insert(id, segments.len());
-        segments.push(Segment {
-            id,
-            sequence: seq.to_string(),
-        });
+        min_id = min_id.min(id);
+        max_id = max_id.max(id);
+        segments_map.insert(id, seq.len());
     }
 
-    // Sort segments by ID to ensure they're in order
-    segments.sort_by_key(|s| s.id);
+    // Create a dense vector for O(1) access
+    let num_segments = max_id - min_id + 1;
+    let mut segment_lengths = vec![0; num_segments];
 
-    Ok(segments)
+    for (id, len) in segments_map {
+        segment_lengths[id - min_id] = len;
+    }
+
+    Ok((segment_lengths, min_id))
 }
 
 /// Project a GAF alignment file into coverage over GFA graph nodes
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Input GFA pangenome graph file
+    /// Input GFA pangenome graph file (supports .gz/.bgz compression)
     #[arg(long)]
     gfa: String,
     /// Input GAF alignment file
@@ -176,15 +175,8 @@ fn main() {
     let args = Args::parse();
 
     // Parse GFA file
-    let segments = parse_gfa(&args.gfa).unwrap();
-    let num_segments = segments.len();
-
-    // Create a map from segment ID to index for fast lookup
-    let segment_id_to_index: HashMap<usize, usize> = segments
-        .iter()
-        .enumerate()
-        .map(|(idx, seg)| (seg.id, idx))
-        .collect();
+    let (segment_lengths, min_id) = parse_gfa(&args.gfa).unwrap();
+    let num_segments = segment_lengths.len();
 
     let mut coverage: Vec<f64> = vec![0.0; num_segments];
 
@@ -208,16 +200,9 @@ fn main() {
             for_each_step(
                 l,
                 |node_id, len| {
-                    if let Some(&idx) = segment_id_to_index.get(&node_id) {
-                        coverage[idx] += len as f64 / *count as f64;
-                    }
+                    coverage[node_id - min_id] += len as f64 / *count as f64;
                 },
-                |node_id| {
-                    segment_id_to_index
-                        .get(&node_id)
-                        .map(|&idx| segments[idx].sequence.len())
-                        .unwrap_or(0)
-                },
+                |node_id| segment_lengths[node_id - min_id],
             );
         });
     } else {
@@ -226,16 +211,9 @@ fn main() {
             for_each_step(
                 l,
                 |node_id, len| {
-                    if let Some(&idx) = segment_id_to_index.get(&node_id) {
-                        coverage[idx] += len as f64;
-                    }
+                    coverage[node_id - min_id] += len as f64;
                 },
-                |node_id| {
-                    segment_id_to_index
-                        .get(&node_id)
-                        .map(|&idx| segments[idx].sequence.len())
-                        .unwrap_or(0)
-                },
+                |node_id| segment_lengths[node_id - min_id],
             );
         });
     }
@@ -247,7 +225,7 @@ fn main() {
             println!(
                 "{}",
                 if args.len_scale {
-                    v / segments[i].sequence.len() as f64
+                    v / segment_lengths[i] as f64
                 } else {
                     v
                 }
@@ -255,8 +233,8 @@ fn main() {
         }
     } else {
         print!("#sample");
-        for seg in &segments {
-            print!("\tnode.{}", seg.id);
+        for n in min_id..min_id + num_segments {
+            print!("\tnode.{}", n);
         }
         println!();
         print!("{}", args.gaf);
@@ -264,7 +242,7 @@ fn main() {
             print!(
                 "\t{}",
                 if args.len_scale {
-                    v / segments[i].sequence.len() as f64
+                    v / segment_lengths[i] as f64
                 } else {
                     v
                 }
