@@ -1,5 +1,5 @@
 use clap::Parser;
-use gfa::gfa::GFA;
+use gfa::gfa::{GFA, Orientation};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{prelude::*, BufReader};
@@ -22,7 +22,7 @@ fn for_each_line_in_file(filename: &str, mut callback: impl FnMut(&str)) {
 ///
 /// # Arguments
 /// * `line` - A GAF format alignment line
-/// * `callback` - Function called for each node with (node_id, coverage_length)
+/// * `callback` - Function called for each node with (node_id, coverage_length, is_reverse)
 /// * `get_node_len` - Function to get the length of a node by its ID
 ///
 /// # Details
@@ -140,22 +140,18 @@ fn main() {
     // This determines which orientations each node appears in within the graph structure
     if args.strand {
         for path in &gfa.paths {
-            for segment_name in &path.segment_names {
-                // Parse segment name which can be like "1+" or "2-"
-                let name_str = segment_name.to_string();
-                let is_reverse = name_str.ends_with('-');
-                let node_id_str = if is_reverse || name_str.ends_with('+') {
-                    &name_str[..name_str.len() - 1]
-                } else {
-                    &name_str
-                };
-                
-                if let Ok(node_id) = node_id_str.parse::<usize>() {
-                    let idx = node_id - 1;
-                    if is_reverse {
-                        orientation_mask[idx] |= 0x2; // Reverse orientation
-                    } else {
-                        orientation_mask[idx] |= 0x1; // Forward orientation
+            // Use the path's iter() method to get segments and orientations
+            for (segment_id, orientation) in path.iter() {
+                // segment_id is the node ID, orientation is Forward or Backward
+                let idx = segment_id - 1;
+                if idx < orientation_mask.len() {
+                    match orientation {
+                        Orientation::Backward => {
+                            orientation_mask[idx] |= 0x2; // Reverse orientation
+                        }
+                        Orientation::Forward => {
+                            orientation_mask[idx] |= 0x1; // Forward orientation
+                        }
                     }
                 }
             }
