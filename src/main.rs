@@ -136,6 +136,23 @@ fn main() {
     let mut coverage_reverse: Vec<f64> = vec![0.0; node_count];
     let mut orientation_mask: Vec<u8> = vec![0; node_count];
 
+    // Build orientation mask from graph paths if --strand is specified
+    // This determines which orientations each node appears in within the graph structure
+    if args.strand {
+        for path in &gfa.paths {
+            for segment_ref in &path.nodes {
+                let node_id = segment_ref.segment_id;
+                let idx = node_id - 1;
+                if segment_ref.is_reverse {
+                    orientation_mask[idx] |= 0x2; // Reverse orientation
+                } else {
+                    orientation_mask[idx] |= 0x1; // Forward orientation
+                }
+            }
+        }
+    }
+
+    // Now process the GAF alignments to calculate coverage
     if args.weight_queries {
         // First pass: count query occurrences
         let mut query_counts: HashMap<String, usize> = HashMap::new();
@@ -160,10 +177,8 @@ fn main() {
                     let value = j as f64 / *count as f64;
                     if is_reverse {
                         coverage_reverse[idx] += value;
-                        orientation_mask[idx] |= 0x2;
                     } else {
                         coverage_forward[idx] += value;
-                        orientation_mask[idx] |= 0x1;
                     }
                 },
                 |id| gfa.segments[id - 1].sequence.len(),
@@ -179,10 +194,8 @@ fn main() {
                     let value = j as f64;
                     if is_reverse {
                         coverage_reverse[idx] += value;
-                        orientation_mask[idx] |= 0x2;
                     } else {
                         coverage_forward[idx] += value;
-                        orientation_mask[idx] |= 0x1;
                     }
                 },
                 |id| gfa.segments[id - 1].sequence.len(),
@@ -215,6 +228,7 @@ fn main() {
             if args.strand {
                 match orientation_mask[idx] {
                     0x3 => {
+                        // Node appears in both orientations in the graph
                         let forward_val = if args.len_scale {
                             forward / node_len
                         } else {
@@ -229,6 +243,7 @@ fn main() {
                         println!("{}", reverse_val);
                     }
                     0x2 => {
+                        // Node appears only in reverse orientation in the graph
                         let value = if args.len_scale {
                             reverse / node_len
                         } else {
@@ -237,6 +252,7 @@ fn main() {
                         println!("{}", value);
                     }
                     0x1 => {
+                        // Node appears only in forward orientation in the graph
                         let value = if args.len_scale {
                             forward / node_len
                         } else {
@@ -245,6 +261,7 @@ fn main() {
                         println!("{}", value);
                     }
                     _ => {
+                        // Node doesn't appear in any graph paths
                         let total = forward + reverse;
                         let value = if args.len_scale {
                             total / node_len
@@ -255,6 +272,7 @@ fn main() {
                     }
                 }
             } else {
+                // Without --strand, combine forward and reverse coverage
                 let total = forward + reverse;
                 println!(
                     "{}",
@@ -267,6 +285,7 @@ fn main() {
             }
         }
     } else {
+        // Tabular output format
         print!("#sample");
         if args.strand {
             for idx in 0..node_count {
@@ -301,6 +320,7 @@ fn main() {
                 let reverse = coverage_reverse[idx];
                 match orientation_mask[idx] {
                     0x3 => {
+                        // Node appears in both orientations in the graph
                         let forward_val = if args.len_scale {
                             forward / node_len
                         } else {
@@ -315,6 +335,7 @@ fn main() {
                         print!("\t{}", reverse_val);
                     }
                     0x2 => {
+                        // Node appears only in reverse orientation in the graph
                         let value = if args.len_scale {
                             reverse / node_len
                         } else {
@@ -323,6 +344,7 @@ fn main() {
                         print!("\t{}", value);
                     }
                     0x1 => {
+                        // Node appears only in forward orientation in the graph
                         let value = if args.len_scale {
                             forward / node_len
                         } else {
@@ -331,6 +353,7 @@ fn main() {
                         print!("\t{}", value);
                     }
                     _ => {
+                        // Node doesn't appear in any graph paths
                         let total = forward + reverse;
                         let value = if args.len_scale {
                             total / node_len
@@ -342,6 +365,7 @@ fn main() {
                 }
             }
         } else {
+            // Without --strand, combine forward and reverse coverage
             for idx in 0..node_count {
                 let node_len = gfa.segments[idx].sequence.len() as f64;
                 let total = coverage_forward[idx] + coverage_reverse[idx];
