@@ -140,13 +140,23 @@ fn main() {
     // This determines which orientations each node appears in within the graph structure
     if args.strand {
         for path in &gfa.paths {
-            for segment_ref in &path.nodes {
-                let node_id = segment_ref.segment_id;
-                let idx = node_id - 1;
-                if segment_ref.is_reverse {
-                    orientation_mask[idx] |= 0x2; // Reverse orientation
+            for segment_name in &path.segment_names {
+                // Parse segment name which can be like "1+" or "2-"
+                let name_str = segment_name.to_string();
+                let is_reverse = name_str.ends_with('-');
+                let node_id_str = if is_reverse || name_str.ends_with('+') {
+                    &name_str[..name_str.len() - 1]
                 } else {
-                    orientation_mask[idx] |= 0x1; // Forward orientation
+                    &name_str
+                };
+                
+                if let Ok(node_id) = node_id_str.parse::<usize>() {
+                    let idx = node_id - 1;
+                    if is_reverse {
+                        orientation_mask[idx] |= 0x2; // Reverse orientation
+                    } else {
+                        orientation_mask[idx] |= 0x1; // Forward orientation
+                    }
                 }
             }
         }
