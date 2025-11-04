@@ -145,7 +145,7 @@ pub fn compute_coverage_with_segments(
     let num_segments = segment_lengths.len();
     let mut coverage: Vec<f64> = vec![0.0; num_segments];
 
-    /// Iterates through each line in a file, applying the provided callback function
+    // Iterates through each line in a file, applying the provided callback function
     let for_each_line = |callback: &mut dyn FnMut(&str)| -> std::io::Result<()> {
         let file = File::open(gaf_path)?;
         let (reader, _compression) = niffler::get_reader(Box::new(file)).unwrap();
