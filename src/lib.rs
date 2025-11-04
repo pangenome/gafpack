@@ -6,7 +6,7 @@ use std::path::Path;
 
 /// Parse GFA file and extract segment information
 /// Returns (segment_lengths, min_id) where segment_lengths[id - min_id] gives the length
-fn parse_gfa(gfa_path: &str) -> std::io::Result<(Vec<usize>, usize)> {
+pub fn parse_gfa(gfa_path: &str) -> std::io::Result<(Vec<usize>, usize)> {
     let path = Path::new(gfa_path);
     let mut reader = create_reader(path)?;
     let mut line = String::new();
