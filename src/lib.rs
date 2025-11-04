@@ -6,7 +6,7 @@ use std::path::Path;
 
 /// Parse GFA file and extract segment information
 /// Returns (segment_lengths, min_id) where segment_lengths[id - min_id] gives the length
-pub fn parse_gfa(gfa_path: &str) -> std::io::Result<(Vec<usize>, usize)> {
+fn parse_gfa(gfa_path: &str) -> std::io::Result<(Vec<usize>, usize)> {
     let path = Path::new(gfa_path);
     let mut reader = create_reader(path)?;
     let mut line = String::new();
@@ -22,10 +22,13 @@ pub fn parse_gfa(gfa_path: &str) -> std::io::Result<(Vec<usize>, usize)> {
         }
 
         let line_str = line.trim();
+
+        // Only process segment lines
         if !line_str.starts_with('S') {
             continue;
         }
 
+        // Parse segment line format: S<tab>id<tab>sequence
         let mut fields = line_str.split('\t');
         let Some((id_str, seq)) = fields.next().and_then(|_type| {
             let id_str = fields.next()?;
@@ -35,12 +38,14 @@ pub fn parse_gfa(gfa_path: &str) -> std::io::Result<(Vec<usize>, usize)> {
             continue;
         };
 
+        // Parse segment ID
         let id = id_str.parse::<usize>().unwrap();
         min_id = min_id.min(id);
         max_id = max_id.max(id);
         segments_map.insert(id, seq.len());
     }
 
+    // Create a dense vector for O(1) access
     let num_segments = max_id - min_id + 1;
     let mut segment_lengths = vec![0; num_segments];
 
@@ -68,54 +73,65 @@ pub fn create_reader(path: &Path) -> std::io::Result<Box<dyn BufRead>> {
 }
 
 /// Process each step in a GAF alignment line, calculating coverage for graph nodes
-pub fn for_each_step(
+///
+/// # Arguments
+/// * `line` - A GAF format alignment line
+/// * `callback` - Function called for each node with (node_id, coverage_length)
+/// * `get_node_len` - Function to get the length of a node by its ID
+///
+/// # Details
+/// Parses GAF alignment lines to extract node coverage information:
+/// - Handles both forward (>) and reverse (<) node traversals
+/// - Adjusts coverage for partial node alignments at path ends
+/// - Accumulates coverage across multi-node paths
+fn for_each_step(
     line: &str,
     mut callback: impl FnMut(usize, usize),
     mut get_node_len: impl FnMut(usize) -> usize,
 ) {
-    let walk = line.split('\t').nth(5).unwrap_or("*");
-    if walk == "*" {
-        return;
-    }
-
-    let target_start = line
-        .split('\t')
-        .nth(7)
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(0);
-    let target_end = line
-        .split('\t')
-        .nth(8)
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(0);
-    let target_len = target_end - target_start;
-
-    let fields = line
-        .split('\t')
-        .nth(5)
-        .unwrap()
-        .split(['<', '>'])
-        .filter(|s| !s.is_empty())
-        .filter_map(|s| s.parse::<usize>().ok())
-        .enumerate()
-        .collect::<Vec<(usize, usize)>>();
-
-    let mut seen: usize = 0;
-    let fields_len = fields.len();
-
-    for (i, j) in fields {
-        let mut len = get_node_len(j);
-        if i == 0 {
-            assert!(len >= target_start);
-            len -= target_start;
+    //eprintln!("{}", line);
+    let walk = line.split('\t').nth(5).unwrap();
+    if walk != "*" {
+        //eprintln!("oheunotoeunthoue");
+        let target_start = line.split('\t').nth(7).unwrap().parse::<usize>().unwrap();
+        let target_end = line.split('\t').nth(8).unwrap().parse::<usize>().unwrap();
+        let target_len = target_end - target_start;
+        //eprintln!("target_len = {}", target_len);
+        let fields = line
+            .split('\t')
+            .nth(5)
+            .unwrap()
+            .split(|c| c == '<' || c == '>')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.parse::<usize>().unwrap())
+            .enumerate()
+            .collect::<Vec<(usize, usize)>>();
+        let mut seen: usize = 0;
+        let fields_len = fields.as_slice().len();
+        //eprintln!("fields len = {}", fields_len);
+        for (i, j) in fields {
+            let mut len = get_node_len(j);
+            //eprintln!("node {} len = {}", j, len);
+            if i == 0 {
+                //eprintln!("on first step {} {} {}", len, target_start, seen);
+                assert!(len >= target_start);
+                len -= target_start;
+            }
+            if i == fields_len - 1 {
+                //eprintln!("on last step {} {} {}", len, target_end, seen);
+                assert!(target_len >= seen);
+                len = target_len - seen;
+            }
+            if i == fields_len {
+                assert!(false);
+            }
+            //eprintln!("node {} adj len = {}", j, len);
+            seen += len;
+            callback(j, len);
         }
-        if i == fields_len - 1 {
-            assert!(target_len >= seen);
-            len = target_len - seen;
-        }
-        seen += len;
-        callback(j, len);
+        //eprintln!("seen = {}", seen);
     }
+    //eprintln!("at end");
 }
 
 /// Compute coverage from GAF file using pre-parsed segment data
@@ -129,6 +145,7 @@ pub fn compute_coverage_with_segments(
     let num_segments = segment_lengths.len();
     let mut coverage: Vec<f64> = vec![0.0; num_segments];
 
+    /// Iterates through each line in a file, applying the provided callback function
     let for_each_line = |callback: &mut dyn FnMut(&str)| -> std::io::Result<()> {
         let file = File::open(gaf_path)?;
         let (reader, _compression) = niffler::get_reader(Box::new(file)).unwrap();
@@ -140,6 +157,7 @@ pub fn compute_coverage_with_segments(
     };
 
     if weight_queries {
+        // First pass: count query occurrences
         let mut query_counts: HashMap<String, usize> = HashMap::new();
         for_each_line(&mut |l: &str| {
             let fields: Vec<&str> = l.split('\t').collect();
@@ -149,6 +167,7 @@ pub fn compute_coverage_with_segments(
             }
         })?;
 
+        // Second pass: calculate coverage with query count adjustment
         for_each_line(&mut |l: &str| {
             let fields: Vec<&str> = l.split('\t').collect();
             let query_key = format!("{}:{}:{}", fields[0], fields[2], fields[3]);
@@ -163,6 +182,7 @@ pub fn compute_coverage_with_segments(
             );
         })?;
     } else {
+        // Single pass without weighting
         for_each_line(&mut |l: &str| {
             for_each_step(
                 l,
@@ -176,9 +196,7 @@ pub fn compute_coverage_with_segments(
 
     if len_scale {
         for (i, cov) in coverage.iter_mut().enumerate() {
-            if segment_lengths[i] > 0 {
-                *cov /= segment_lengths[i] as f64;
-            }
+            *cov /= segment_lengths[i] as f64;
         }
     }
 
@@ -213,14 +231,4 @@ pub fn format_coverage_column(sample_name: &str, coverage: &[f64]) -> String {
         output.push_str(&format!("{}\n", v));
     }
     output
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_gfa() {
-        // Test would need a sample GFA file
-    }
 }
