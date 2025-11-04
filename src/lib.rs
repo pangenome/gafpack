@@ -118,15 +118,14 @@ pub fn for_each_step(
     }
 }
 
-/// Compute coverage from GAF file on a GFA graph
-/// Returns coverage vector indexed by (node_id - min_id)
-pub fn compute_coverage(
-    gfa_path: &str,
+/// Compute coverage from GAF file using pre-parsed segment data
+pub fn compute_coverage_with_segments(
+    segment_lengths: &[usize],
+    min_id: usize,
     gaf_path: &str,
     len_scale: bool,
     weight_queries: bool,
-) -> std::io::Result<(Vec<f64>, usize)> {
-    let (segment_lengths, min_id) = parse_gfa(gfa_path)?;
+) -> std::io::Result<Vec<f64>> {
     let num_segments = segment_lengths.len();
     let mut coverage: Vec<f64> = vec![0.0; num_segments];
 
@@ -183,6 +182,19 @@ pub fn compute_coverage(
         }
     }
 
+    Ok(coverage)
+}
+
+/// Compute coverage from GAF file on a GFA graph
+/// Returns coverage vector indexed by (node_id - min_id)
+pub fn compute_coverage(
+    gfa_path: &str,
+    gaf_path: &str,
+    len_scale: bool,
+    weight_queries: bool,
+) -> std::io::Result<(Vec<f64>, usize)> {
+    let (segment_lengths, min_id) = parse_gfa(gfa_path)?;
+    let coverage = compute_coverage_with_segments(&segment_lengths, min_id, gaf_path, len_scale, weight_queries)?;
     Ok((coverage, min_id))
 }
 
