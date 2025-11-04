@@ -1,5 +1,5 @@
 use clap::Parser;
-use gafpack::{compute_coverage, format_coverage_column, parse_gfa};
+use gafpack::{compute_coverage, format_coverage_column};
 
 /// Project a GAF alignment file into coverage over GFA graph nodes
 #[derive(Parser, Debug)]

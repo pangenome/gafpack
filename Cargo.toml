@@ -14,5 +14,5 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.5.51", features = ["derive"] }
-niffler = "2.6.0"
-flate2 = "1.1.2"
+niffler = "3.0.0"
+flate2 = "1.1.3"
