@@ -25,12 +25,8 @@ struct Args {
 fn main() {
     let args = Args::parse();
 
-    let (coverage, min_id) = compute_coverage(
-        &args.gfa,
-        &args.gaf,
-        args.len_scale,
-        args.weight_queries,
-    ).unwrap();
+    let (coverage, min_id) =
+        compute_coverage(&args.gfa, &args.gaf, args.len_scale, args.weight_queries).unwrap();
 
     let num_segments = coverage.len();
 

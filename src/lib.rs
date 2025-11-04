@@ -54,7 +54,10 @@ pub fn parse_gfa(gfa_path: &str) -> std::io::Result<(Vec<usize>, usize)> {
 /// Create a reader that handles compressed files
 pub fn create_reader(path: &Path) -> std::io::Result<Box<dyn BufRead>> {
     let file = File::open(path)?;
-    if path.extension().is_some_and(|ext| ext == "gz" || ext == "bgz") {
+    if path
+        .extension()
+        .is_some_and(|ext| ext == "gz" || ext == "bgz")
+    {
         let decoder = GzDecoder::new(file);
         let buf_reader = BufReader::new(decoder);
         Ok(Box::new(buf_reader))
@@ -75,15 +78,23 @@ pub fn for_each_step(
         return;
     }
 
-    let target_start = line.split('\t').nth(7).and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
-    let target_end = line.split('\t').nth(8).and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+    let target_start = line
+        .split('\t')
+        .nth(7)
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
+    let target_end = line
+        .split('\t')
+        .nth(8)
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
     let target_len = target_end - target_start;
 
     let fields = line
         .split('\t')
         .nth(5)
         .unwrap()
-        .split(|c| c == '<' || c == '>')
+        .split(['<', '>'])
         .filter(|s| !s.is_empty())
         .filter_map(|s| s.parse::<usize>().ok())
         .enumerate()
