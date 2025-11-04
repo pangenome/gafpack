@@ -101,7 +101,7 @@ fn for_each_step(
             .split('\t')
             .nth(5)
             .unwrap()
-            .split(|c| c == '<' || c == '>')
+            .split(['<', '>'])
             .filter(|s| !s.is_empty())
             .map(|s| s.parse::<usize>().unwrap())
             .enumerate()
