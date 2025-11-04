@@ -194,7 +194,13 @@ pub fn compute_coverage(
     weight_queries: bool,
 ) -> std::io::Result<(Vec<f64>, usize)> {
     let (segment_lengths, min_id) = parse_gfa(gfa_path)?;
-    let coverage = compute_coverage_with_segments(&segment_lengths, min_id, gaf_path, len_scale, weight_queries)?;
+    let coverage = compute_coverage_with_segments(
+        &segment_lengths,
+        min_id,
+        gaf_path,
+        len_scale,
+        weight_queries,
+    )?;
     Ok((coverage, min_id))
 }
 
