@@ -13,6 +13,12 @@ name = "gafpack"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4.5.51", features = ["derive"] }
-niffler = "3.0.0"
-flate2 = "1.1.3"
+clap = { version = "4.5", features = ["derive"] }
+niffler = "3.0"
+flate2 = "1.1"
+
+# Copy number calling
+statrs = "0.18"                                       # Negative binomial distribution
+good_lp = { version = "1.14", default-features = false, features = ["highs"] }  # ILP solver (MIT, free)
+log = "0.4"                                           # Logging facade
+env_logger = "0.11"                                   # Logger implementation
