@@ -626,7 +626,7 @@ fn to_nb_params(len: f64, alpha: f64, beta: f64, eps: f64) -> (f64, f64, f64) {
     (r, p, p0)
 }
 
-/// Compute log P(CN=k) for candidate CN values
+/// Compute log P(CN=k) for candidate CN values (aggregate coverage version)
 /// Returns (lower_bound, normalized_log_probs)
 ///
 /// # Arguments
@@ -677,6 +677,110 @@ pub fn cn_log_probs(cov: f64, len: usize, alpha: f64, beta: f64, eps: f64, diff_
     }
 
     (lo, probs)
+}
+
+/// Compute log P(CN=k) using per-bin coverages (floco-compatible version)
+/// Following floco's counts_to_probabs.py:19-70 exactly:
+/// - NB params based on bin_size (not node length)
+/// - CN=0: exponential distribution sum over bins
+/// - CN>=1: sum of NB logpmf over ALL bins
+///
+/// # Arguments
+/// * `bin_coverages` - Vector of per-bin coverage values
+/// * `bin_size` - Size of each bin in bp
+/// * `alpha` - Coverage per bp at CN=1
+/// * `beta` - Std dev per bp
+/// * `eps` - Epsilon for CN=0 sensitivity
+/// * `diff_cutoff` - Stop searching when log-prob drops this much from max
+///
+/// # Returns
+/// (lower_bound, normalized_log_probs)
+pub fn cn_log_probs_bins(
+    bin_coverages: &[f64],
+    bin_size: usize,
+    alpha: f64,
+    beta: f64,
+    eps: f64,
+    diff_cutoff: f64,
+) -> (i32, Vec<f64>) {
+    let n_bins = bin_coverages.len();
+
+    if n_bins == 0 || bin_size == 0 || alpha <= 0.0 {
+        debug!("Degenerate case: n_bins={}, bin_size={}, alpha={}", n_bins, bin_size, alpha);
+        return (0, vec![0.0]);
+    }
+
+    // NB params based on bin_size (NOT node length) - following floco
+    let (r, p, p0) = to_nb_params(bin_size as f64, alpha, beta, eps);
+
+    // Total coverage across all bins (for starting estimate and CN=0)
+    let total_cov: f64 = bin_coverages.iter().sum();
+    let mean_cov = total_cov / n_bins as f64;
+
+    // Starting estimate based on mean bin coverage
+    let start = ((mean_cov / (bin_size as f64 * alpha)).round() as i32).max(0);
+
+    let mut probs = Vec::with_capacity(16);
+    let mut lo = start;
+    let mut max_prob = f64::NEG_INFINITY;
+
+    // Search upward from start
+    for cn in start..(start + MAX_CN_SEARCH) {
+        let lp = log_prob_cn_bins(cn, bin_coverages, r, p, p0);
+        if (cn - start) > MIN_EXTENSION && lp + diff_cutoff < max_prob {
+            break;
+        }
+        max_prob = max_prob.max(lp);
+        probs.push(lp);
+    }
+
+    // Search downward from start
+    for cn in (0..start).rev() {
+        let lp = log_prob_cn_bins(cn, bin_coverages, r, p, p0);
+        if (start - cn) > MIN_EXTENSION && lp + diff_cutoff < max_prob {
+            break;
+        }
+        max_prob = max_prob.max(lp);
+        probs.insert(0, lp);
+        lo = cn;
+    }
+
+    // Normalize via log-sum-exp
+    let lse = log_sum_exp(&probs);
+    for prob in &mut probs {
+        *prob -= lse;
+    }
+
+    (lo, probs)
+}
+
+/// Log probability of specific CN value using per-bin coverages
+/// Following floco's counts_to_probabs.py exactly
+#[inline]
+fn log_prob_cn_bins(cn: i32, bin_coverages: &[f64], r: f64, p: f64, p0: f64) -> f64 {
+    let n_bins = bin_coverages.len();
+
+    if cn < 1 {
+        // CN=0: Exponential distribution - floco's formula:
+        // -p0 * sum(bins) + n_bins * log(1 - exp(-p0))
+        let total_cov: f64 = bin_coverages.iter().sum();
+        -p0 * total_cov + n_bins as f64 * (1.0 - (-p0).exp()).ln()
+    } else {
+        // CN>=1: Sum of NB logpmf over ALL bins
+        let r_cn = r * cn as f64;
+        if r_cn <= 0.0 || p <= 0.0 || p >= 1.0 {
+            return f64::NEG_INFINITY;
+        }
+
+        match NegativeBinomial::new(r_cn, p) {
+            Ok(nb) => {
+                bin_coverages.iter()
+                    .map(|&cov| nb.ln_pmf(cov.round() as u64))
+                    .sum()
+            }
+            Err(_) => f64::NEG_INFINITY,
+        }
+    }
 }
 
 /// Log probability of specific CN value
@@ -751,5 +855,28 @@ mod tests {
         // Probabilities should sum to ~1 (in log space, max should be close to 0)
         let max_prob = probs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
         assert!(max_prob > -10.0); // At least one probable CN
+    }
+
+    #[test]
+    fn test_cn_log_probs_bins_basic() {
+        // Test bin-level CN probability calculation
+        // 10 bins, each with coverage ~100 (total 1000)
+        let bin_coverages = vec![100.0; 10];
+        let bin_size = 100;
+        let (lo, probs) = cn_log_probs_bins(&bin_coverages, bin_size, 0.5, 0.2, 0.02, 40000.0);
+        assert!(lo >= 0);
+        assert!(!probs.is_empty());
+        // Probabilities should be normalized
+        let max_prob = probs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        assert!(max_prob > -10.0);
+    }
+
+    #[test]
+    fn test_cn_log_probs_bins_empty() {
+        // Empty bins should return degenerate case
+        let bin_coverages: Vec<f64> = vec![];
+        let (lo, probs) = cn_log_probs_bins(&bin_coverages, 100, 0.5, 0.2, 0.02, 40000.0);
+        assert_eq!(lo, 0);
+        assert_eq!(probs.len(), 1);
     }
 }

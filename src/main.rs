@@ -1,6 +1,6 @@
 use clap::Parser;
 use gafpack::{
-    bin_coverages_from_trackers, compute_coverage, compute_coverage_with_edge_support,
+    bin_coverages_from_trackers, clip_nodes, compute_coverage, compute_coverage_with_edge_support,
     create_node_bin_trackers, format_coverage_column, parse_gfa_with_edges, cn, ilp,
 };
 use log::{info, warn, error, debug};
@@ -69,8 +69,9 @@ struct Args {
     prob_scale: f64,
 
     /// CN probability cutoff: controls how many CN values are considered per node
-    #[arg(long, default_value_t = 100.0)]
-    diff_cutoff: f64,
+    /// If not specified, auto-computed as 4 * |source_prob| (floco-compatible)
+    #[arg(long)]
+    diff_cutoff: Option<f64>,
 
     /// Number of threads for ILP solver (0 = auto)
     #[arg(short = 't', long, default_value_t = 0)]
@@ -154,9 +155,29 @@ fn run_copy_number(args: &Args) {
 
     info!("Found {} segments, {} edges", lengths.len(), edges.len());
 
-    // Create per-bin trackers before GAF parsing (like floco's bin_nodes())
+    // ─── Node Clipping (Gap 1) ────────────────────────────────────────────────
+    // Compute node clipping based on edge overlaps (following floco's graph_processing.py)
+    info!("Computing node clipping based on edge overlaps...");
+    let clipping = clip_nodes(&lengths, &edges, min_id, &left_edges, &right_edges);
+
+    // Compute clipped lengths for CN calculation
+    let clipped_lengths: Vec<usize> = lengths
+        .iter()
+        .zip(clipping.iter())
+        .map(|(&len, clip)| clip.clipped_len(len))
+        .collect();
+
+    let total_clipped_bp: usize = clipping.iter()
+        .map(|c| c.l_clipping + c.r_clipping)
+        .sum();
+    let nodes_with_clipping = clipping.iter()
+        .filter(|c| c.l_clipping > 0 || c.r_clipping > 0)
+        .count();
+    debug!("{} nodes have clipping, total {} bp clipped", nodes_with_clipping, total_clipped_bp);
+
+    // Create per-bin trackers using CLIPPED lengths (like floco's bin_nodes())
     debug!("Creating per-bin trackers (bin_size={})...", args.bin_size);
-    let mut bin_trackers = create_node_bin_trackers(&lengths, args.bin_size);
+    let mut bin_trackers = create_node_bin_trackers(&clipped_lengths, args.bin_size);
     let nodes_with_bins = bin_trackers.iter().filter(|t| t.is_some()).count();
     debug!("{} nodes have bin trackers", nodes_with_bins);
 
@@ -169,7 +190,7 @@ fn run_copy_number(args: &Args) {
         info!("Computing coverage from GAF (deduplication disabled)...");
     }
     let (coverage, read_lengths, skipped_alignments) = compute_coverage_with_edge_support(
-        &lengths,
+        &lengths,  // Use original lengths for GAF parsing coordinates
         min_id,
         &args.gaf,
         &mut edges,
@@ -203,33 +224,48 @@ fn run_copy_number(args: &Args) {
     info!("Estimating NB parameters (testing ploidies: {:?})...", args.ploidy);
     let (alpha, beta) = cn::estimate_nb_params(&bins, args.bin_size, &args.ploidy);
 
-    // Fit read length distribution (for edge coverage penalty)
+    // Fit read length distribution (for edge coverage penalty and bin subsampling)
     info!("Fitting read length distribution...");
     let rlen_params = cn::fit_read_length_distribution(&read_lengths);
-    debug!("Read length distribution: mean={:.0}", rlen_params.mean());
+    let rlen_mean = rlen_params.mean();
+    debug!("Read length distribution: mean={:.0}", rlen_mean);
 
-    // Penalty parameters from CLI (following floco defaults)
+    // ─── Auto-compute diff_cutoff (Gap 5) ─────────────────────────────────────
+    // Following floco: diff_cutoff = 4 * |source_prob|
     let source_prob: f64 = args.source_prob;
     let cheap_penalty: f64 = args.cheap_source;
-    let diff_cutoff: f64 = args.diff_cutoff;
+    let diff_cutoff: f64 = args.diff_cutoff.unwrap_or_else(|| {
+        let auto_cutoff = 4.0 * source_prob.abs();
+        debug!("Auto-computed diff_cutoff = 4 * |{}| = {:.1}", source_prob, auto_cutoff);
+        auto_cutoff
+    });
 
     info!("Using complexity level {}, source_prob={:.1}, cheap_source={:.1}, diff_cutoff={:.1}",
           args.complexity, source_prob, cheap_penalty, diff_cutoff);
 
-    // Prepare ILP nodes
-    debug!("Preparing {} ILP nodes...", lengths.len());
+    // ─── Prepare ILP nodes with per-bin coverage (Gaps 2 & 3) ─────────────────
+    debug!("Preparing {} ILP nodes with per-bin coverage...", lengths.len());
     let nodes: Vec<ilp::IlpNode> = (0..lengths.len())
         .map(|i| {
-            ilp::IlpNode::new(
+            // Get per-bin coverages for this node (if available)
+            let node_bins: Vec<f64> = bin_trackers[i]
+                .as_ref()
+                .map(|t| t.to_float_bins())
+                .unwrap_or_default();
+
+            ilp::IlpNode::new_with_bins(
                 min_id + i,
-                lengths[i],
+                clipped_lengths[i],  // Use CLIPPED length for CN calculation
                 coverage[i],
+                &node_bins,
+                args.bin_size,
                 left_edges[i],
                 right_edges[i],
                 alpha,
                 beta,
                 args.epsilon,
                 diff_cutoff,
+                rlen_mean,  // For bin subsampling
             )
         })
         .collect();

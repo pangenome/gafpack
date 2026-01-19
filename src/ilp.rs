@@ -16,6 +16,36 @@ use std::collections::HashMap;
 
 // ─── Data Structures ─────────────────────────────────────────────────────────
 
+/// Simple deterministic RNG (LCG) for reproducible bin subsampling
+struct SimpleRng(u64);
+
+impl SimpleRng {
+    fn new(seed: u64) -> Self {
+        Self(seed)
+    }
+
+    fn next(&mut self) -> usize {
+        // Linear congruential generator
+        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (self.0 >> 33) as usize
+    }
+
+    /// Sample n items from a vector without replacement (Fisher-Yates shuffle variant)
+    fn sample<T: Clone>(&mut self, items: &[T], n: usize) -> Vec<T> {
+        if n >= items.len() {
+            return items.to_vec();
+        }
+        let mut result: Vec<T> = Vec::with_capacity(n);
+        let mut indices: Vec<usize> = (0..items.len()).collect();
+        for i in 0..n {
+            let j = i + (self.next() % (items.len() - i));
+            indices.swap(i, j);
+            result.push(items[indices[i]].clone());
+        }
+        result
+    }
+}
+
 /// Node data prepared for ILP
 pub struct IlpNode {
     pub id: usize,
@@ -29,6 +59,7 @@ pub struct IlpNode {
 }
 
 impl IlpNode {
+    /// Create ILP node using aggregate coverage (legacy method)
     pub fn new(
         id: usize,
         length: usize,
@@ -46,6 +77,81 @@ impl IlpNode {
         debug!(
             "Node {}: len={}, cov={:.0}, CN range=[{}, {}]",
             id, length, coverage, cn_lo, cn_hi
+        );
+
+        IlpNode {
+            id,
+            length,
+            coverage,
+            cn_lo,
+            cn_hi,
+            cn_probs,
+            left_edges,
+            right_edges,
+        }
+    }
+
+    /// Create ILP node using per-bin coverages (floco-compatible method)
+    /// Following floco's flow_ilp.py:16-29, 84 for bin subsampling
+    ///
+    /// # Arguments
+    /// * `bin_coverages` - Per-bin coverage values
+    /// * `bin_size` - Size of each bin in bp
+    /// * `rlen_mean` - Mean read length (for subsampling distance calculation)
+    pub fn new_with_bins(
+        id: usize,
+        length: usize,
+        coverage: f64,
+        bin_coverages: &[f64],
+        bin_size: usize,
+        left_edges: usize,
+        right_edges: usize,
+        alpha: f64,
+        beta: f64,
+        epsilon: f64,
+        diff_cutoff: f64,
+        rlen_mean: f64,
+    ) -> Self {
+        // Compute CN probs based on whether we have bins
+        let (cn_lo, cn_probs) = if bin_coverages.is_empty() || bin_coverages.len() == 1 {
+            // No bins or single bin - use aggregate coverage with node length
+            // Following floco: if nbins <= 1, use single value
+            cn::cn_log_probs(coverage, length, alpha, beta, epsilon, diff_cutoff)
+        } else {
+            // Multiple bins - apply subsampling following floco's flow_ilp.py:16-29
+            // subsampling_dist = max(1000, rlen_mean)
+            // nbins = floor(n_bins * binsize / subsampling_dist)
+            let subsampling_dist = 1000.0_f64.max(rlen_mean);
+            let total_len = bin_coverages.len() * bin_size;
+            let target_nbins = ((total_len as f64) / subsampling_dist).floor() as usize;
+
+            if target_nbins <= 1 {
+                // After subsampling we'd have <= 1 bin, use aggregate
+                cn::cn_log_probs(coverage, length, alpha, beta, epsilon, diff_cutoff)
+            } else {
+                // Subsample bins
+                let sampled_bins = if target_nbins >= bin_coverages.len() {
+                    bin_coverages.to_vec()
+                } else {
+                    // Use deterministic RNG with node ID as seed for reproducibility
+                    let mut rng = SimpleRng::new(id as u64);
+                    rng.sample(bin_coverages, target_nbins)
+                };
+
+                debug!(
+                    "Node {}: subsampled {} bins to {} (subsampling_dist={:.0})",
+                    id, bin_coverages.len(), sampled_bins.len(), subsampling_dist
+                );
+
+                cn::cn_log_probs_bins(&sampled_bins, bin_size, alpha, beta, epsilon, diff_cutoff)
+            }
+        };
+
+        let cn_hi = cn_lo + cn_probs.len() as i32 - 1;
+
+        debug!(
+            "Node {}: len={}, cov={:.0}, bins={}, CN range=[{}, {}]",
+            id, length, coverage, bin_coverages.len(), cn_lo, cn_hi
         );
 
         IlpNode {
@@ -375,18 +481,24 @@ pub fn solve(
             // Left side
             problem = problem.with(constraint!(BIG_M * x1_left[i] >= src_left[i]));
             problem = problem.with(constraint!(BIG_M * x2_left[i] >= snk_left[i]));
+            // CRITICAL: At least one of src or snk must be used (floco's x1 + x2 >= 1)
+            problem = problem.with(constraint!(x1_left[i] + x2_left[i] >= 1.0));
             // Right side
             problem = problem.with(constraint!(BIG_M * x1_right[i] >= src_right[i]));
             problem = problem.with(constraint!(BIG_M * x2_right[i] >= snk_right[i]));
+            // CRITICAL: At least one of src or snk must be used (floco's x1 + x2 >= 1)
+            problem = problem.with(constraint!(x1_right[i] + x2_right[i] >= 1.0));
         }
 
         // Edge pair indicators: x1 activated by forward flow, x2 activated by reverse flow
         for (p, &(fwd_idx, rev_idx)) in pair_indices.iter().enumerate() {
             problem = problem.with(constraint!(BIG_M * pair_x1[p] >= flow_vars[fwd_idx]));
             problem = problem.with(constraint!(BIG_M * pair_x2[p] >= flow_vars[rev_idx]));
+            // CRITICAL: At least one direction must be used (floco's x1 + x2 >= 1)
+            problem = problem.with(constraint!(pair_x1[p] + pair_x2[p] >= 1.0));
         }
 
-        debug!("Added {} x1/x2 indicator constraints", n * 4 + pair_indices.len() * 2);
+        debug!("Added {} x1/x2 indicator constraints", n * 6 + pair_indices.len() * 3);
     }
 
     // ─── Solve ───────────────────────────────────────────────────────────────

@@ -124,6 +124,148 @@ pub struct NodeInfo {
     pub right_edges: usize,  // count of edges on right side
 }
 
+// ─── Node Clipping ────────────────────────────────────────────────────────────
+
+/// Per-node clipping information (following floco's graph_processing.py:111-158)
+/// Tracks how much of each node's left and right ends should be clipped
+/// to account for edge overlaps
+#[derive(Clone, Debug, Default)]
+pub struct NodeClipping {
+    pub l_clipping: usize,  // Amount clipped from left end
+    pub r_clipping: usize,  // Amount clipped from right end
+}
+
+impl NodeClipping {
+    /// Calculate clipped length: original_len - l_clipping - r_clipping
+    pub fn clipped_len(&self, original_len: usize) -> usize {
+        original_len.saturating_sub(self.l_clipping + self.r_clipping)
+    }
+}
+
+/// Compute node clipping based on edge overlaps
+/// Following floco's graph_processing.py:111-158 exactly:
+/// 1. Sort edges by DECREASING overlap size
+/// 2. For each edge, decide which node to clip based on:
+///    a. If one already has enough clipping, clip the other
+///    b. If neither is clipped enough, clip the node with MORE edges on that side
+///    c. Tie-breaker: clip the LONGER node
+///
+/// # Arguments
+/// * `lengths` - Node lengths indexed by (node_id - min_id)
+/// * `edges` - Graph edges
+/// * `min_id` - Minimum node ID
+/// * `left_edge_counts` - Number of edges on left side of each node
+/// * `right_edge_counts` - Number of edges on right side of each node
+///
+/// # Returns
+/// Vector of NodeClipping, indexed by (node_id - min_id)
+pub fn clip_nodes(
+    lengths: &[usize],
+    edges: &[Edge],
+    min_id: usize,
+    left_edge_counts: &[usize],
+    right_edge_counts: &[usize],
+) -> Vec<NodeClipping> {
+    let n = lengths.len();
+    let mut clipping: Vec<NodeClipping> = vec![NodeClipping::default(); n];
+
+    if edges.is_empty() {
+        return clipping;
+    }
+
+    // Create sorted edge indices by DECREASING overlap
+    let mut edge_indices: Vec<usize> = (0..edges.len()).collect();
+    edge_indices.sort_by(|&a, &b| edges[b].overlap.cmp(&edges[a].overlap));
+
+    for &edge_idx in &edge_indices {
+        let edge = &edges[edge_idx];
+        let overlap = edge.overlap;
+
+        if overlap == 0 {
+            continue;
+        }
+
+        let from_idx = edge.from - min_id;
+        let to_idx = edge.to - min_id;
+
+        // Determine which side of each node this edge affects
+        // from_rev: true if edge leaves from left side of 'from' node
+        // to_rev: true if edge enters right side of 'to' node
+        let from_is_left = edge.from_rev;  // Edge leaves from left side
+        let to_is_right = edge.to_rev;     // Edge enters right side
+
+        // Current clipping on the affected sides
+        let from_current = if from_is_left {
+            clipping[from_idx].l_clipping
+        } else {
+            clipping[from_idx].r_clipping
+        };
+
+        let to_current = if to_is_right {
+            clipping[to_idx].r_clipping
+        } else {
+            clipping[to_idx].l_clipping
+        };
+
+        // Check if nodes already have enough clipping
+        let from_has_enough = from_current >= overlap;
+        let to_has_enough = to_current >= overlap;
+
+        // Decide which node to clip
+        let clip_from = if from_has_enough && to_has_enough {
+            // Both have enough - no change needed
+            continue;
+        } else if from_has_enough {
+            // 'from' has enough, clip 'to'
+            false
+        } else if to_has_enough {
+            // 'to' has enough, clip 'from'
+            true
+        } else {
+            // Neither has enough - use edge count as tie-breaker
+            let from_edge_count = if from_is_left {
+                left_edge_counts[from_idx]
+            } else {
+                right_edge_counts[from_idx]
+            };
+
+            let to_edge_count = if to_is_right {
+                right_edge_counts[to_idx]
+            } else {
+                left_edge_counts[to_idx]
+            };
+
+            if from_edge_count > to_edge_count {
+                // 'from' has more edges on this side, clip 'from'
+                true
+            } else if to_edge_count > from_edge_count {
+                // 'to' has more edges on this side, clip 'to'
+                false
+            } else {
+                // Same edge count - clip the LONGER node
+                lengths[from_idx] >= lengths[to_idx]
+            }
+        };
+
+        // Apply the clipping
+        if clip_from {
+            if from_is_left {
+                clipping[from_idx].l_clipping = clipping[from_idx].l_clipping.max(overlap);
+            } else {
+                clipping[from_idx].r_clipping = clipping[from_idx].r_clipping.max(overlap);
+            }
+        } else {
+            if to_is_right {
+                clipping[to_idx].r_clipping = clipping[to_idx].r_clipping.max(overlap);
+            } else {
+                clipping[to_idx].l_clipping = clipping[to_idx].l_clipping.max(overlap);
+            }
+        }
+    }
+
+    clipping
+}
+
 /// Parse GFA file and extract segment information
 /// Returns (segment_lengths, min_id) where segment_lengths[id - min_id] gives the length
 pub fn parse_gfa(gfa_path: &str) -> std::io::Result<(Vec<usize>, usize)> {
@@ -1001,4 +1143,68 @@ pub fn bin_coverages_from_trackers(
     let hi_idx = (all_bins.len() as f64 * 0.97) as usize;
 
     all_bins[lo_idx..hi_idx].to_vec()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_node_clipping_empty() {
+        let lengths = vec![100, 200, 300];
+        let edges: Vec<Edge> = vec![];
+        let left_edges = vec![0, 0, 0];
+        let right_edges = vec![0, 0, 0];
+
+        let clipping = clip_nodes(&lengths, &edges, 1, &left_edges, &right_edges);
+
+        assert_eq!(clipping.len(), 3);
+        assert_eq!(clipping[0].l_clipping, 0);
+        assert_eq!(clipping[0].r_clipping, 0);
+    }
+
+    #[test]
+    fn test_node_clipping_single_edge() {
+        // Node 1 (len 100) -> Node 2 (len 200) with overlap 10
+        let lengths = vec![100, 200];
+        let edges = vec![Edge {
+            from: 1,
+            to: 2,
+            from_rev: false,  // Leaves from right side of node 1
+            to_rev: false,    // Enters left side of node 2
+            overlap: 10,
+            sup_reads: 0,
+        }];
+        let left_edges = vec![0, 1];  // Node 2 has 1 left edge
+        let right_edges = vec![1, 0]; // Node 1 has 1 right edge
+
+        let clipping = clip_nodes(&lengths, &edges, 1, &left_edges, &right_edges);
+
+        assert_eq!(clipping.len(), 2);
+        // The longer node (200) should be clipped
+        // Since edge counts are equal (1 each), the longer node gets clipped
+        assert_eq!(clipping[1].l_clipping, 10);
+        assert_eq!(clipping[0].r_clipping, 0);
+    }
+
+    #[test]
+    fn test_node_clipping_preserves_length() {
+        let clipping = NodeClipping { l_clipping: 10, r_clipping: 15 };
+        assert_eq!(clipping.clipped_len(100), 75);
+    }
+
+    #[test]
+    fn test_node_clipping_saturating() {
+        // Ensure clipped_len doesn't go negative
+        let clipping = NodeClipping { l_clipping: 60, r_clipping: 60 };
+        assert_eq!(clipping.clipped_len(100), 0);
+    }
+
+    #[test]
+    fn test_read_length_params_mean() {
+        let params = ReadLengthParams::new(0.0, 1000.0, 200.0);
+        // For shape=0 (symmetric), mean should equal loc
+        let mean = params.mean();
+        assert!((mean - 1000.0).abs() < 1.0);
+    }
 }
