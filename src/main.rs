@@ -77,6 +77,10 @@ struct Args {
     #[arg(short = 't', long, default_value_t = 0)]
     threads: u32,
 
+    /// Maximum nodes per ILP partition (0 = no partitioning)
+    #[arg(long, default_value_t = 1_500_000)]
+    partition_size: usize,
+
     /// Disable read deduplication (dedup is enabled by default for CN mode)
     /// Deduplication filters overlapping multi-mappings per read (requires sorted GAF)
     #[arg(long)]
@@ -276,24 +280,51 @@ fn run_copy_number(args: &Args) {
         info!("Using simple ML estimation (--no-flow)...");
         ilp::solve_simple(&nodes)
     } else {
-        info!("Solving ILP with flow constraints...");
-        match ilp::solve(
-            &nodes,
-            &edges,
-            min_id,
-            alpha,
-            &rlen_params,
-            cheap_penalty,
-            source_prob,
-            args.complexity,
-            args.prob_scale,
-            args.threads,
-        ) {
-            Ok(calls) => calls,
-            Err(e) => {
-                error!("ILP failed: {}", e);
-                warn!("Falling back to simple ML estimation...");
-                ilp::solve_simple(&nodes)
+        // Decide whether to use partitioning based on graph size
+        let use_partitioning = args.partition_size > 0 && nodes.len() > args.partition_size;
+
+        if use_partitioning {
+            info!("Solving ILP with flow constraints (partitioned)...");
+            match ilp::solve_partitioned(
+                &nodes,
+                &edges,
+                min_id,
+                alpha,
+                &rlen_params,
+                cheap_penalty,
+                source_prob,
+                args.complexity,
+                args.prob_scale,
+                args.threads,
+                args.partition_size,
+            ) {
+                Ok(calls) => calls,
+                Err(e) => {
+                    error!("Partitioned ILP failed: {}", e);
+                    warn!("Falling back to simple ML estimation...");
+                    ilp::solve_simple(&nodes)
+                }
+            }
+        } else {
+            info!("Solving ILP with flow constraints...");
+            match ilp::solve(
+                &nodes,
+                &edges,
+                min_id,
+                alpha,
+                &rlen_params,
+                cheap_penalty,
+                source_prob,
+                args.complexity,
+                args.prob_scale,
+                args.threads,
+            ) {
+                Ok(calls) => calls,
+                Err(e) => {
+                    error!("ILP failed: {}", e);
+                    warn!("Falling back to simple ML estimation...");
+                    ilp::solve_simple(&nodes)
+                }
             }
         }
     };

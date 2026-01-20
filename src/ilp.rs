@@ -4,6 +4,7 @@
 //! Implements network flow constraints to ensure biologically plausible CN assignments.
 
 use crate::cn;
+use crate::partition::{create_partitions, extract_partition_nodes, filter_edges_for_partition};
 use crate::Edge;
 use crate::ReadLengthParams;
 use good_lp::{constraint, variable, Expression, ProblemVariables, Solution, SolverModel, Variable};
@@ -590,6 +591,116 @@ pub fn solve(
     } else {
         debug!("All nodes have CN matching ML estimate (no flow corrections)");
     }
+
+    Ok(cn_calls)
+}
+
+/// Solve CN calling with flow constraints using graph partitioning
+///
+/// Splits large graphs into smaller partitions to avoid solver overflow.
+/// Each partition is solved independently, with boundary nodes using the
+/// cheap_penalty mechanism for flow entering/exiting the partition.
+///
+/// # Arguments
+/// * `nodes` - ILP node data with coverage and CN probabilities
+/// * `edges` - Graph edges with support counts
+/// * `min_id` - Minimum node ID (for indexing)
+/// * `alpha` - Coverage per bp at CN=1 (for edge penalty calculation)
+/// * `rlen_params` - Read length distribution (for edge penalty calculation)
+/// * `cheap_penalty` - Penalty for edges with insufficient support
+/// * `source_prob` - Expensive super-edge penalty
+/// * `complexity` - Model complexity: 1=basic, 2=+edge_cov_pen, 3=+reverse_edge_pen
+/// * `prob_scale` - Scale factor for log-probabilities
+/// * `threads` - Number of threads for parallel solving (0 = auto)
+/// * `partition_size` - Maximum nodes per partition
+pub fn solve_partitioned(
+    nodes: &[IlpNode],
+    edges: &[Edge],
+    min_id: usize,
+    alpha: f64,
+    rlen_params: &ReadLengthParams,
+    cheap_penalty: f64,
+    source_prob: f64,
+    complexity: u8,
+    prob_scale: f64,
+    threads: u32,
+    partition_size: usize,
+) -> Result<Vec<u32>, String> {
+    let num_nodes = nodes.len();
+
+    // Create partitions
+    let partitions = create_partitions(min_id, num_nodes, partition_size);
+
+    if partitions.len() == 1 {
+        // No partitioning needed, use regular solve
+        info!("Graph fits in single partition, using standard solve");
+        return solve(
+            nodes, edges, min_id, alpha, rlen_params,
+            cheap_penalty, source_prob, complexity, prob_scale, threads,
+        );
+    }
+
+    info!(
+        "Partitioning {} nodes into {} partitions (max {} nodes each)",
+        num_nodes, partitions.len(), partition_size
+    );
+
+    // Allocate output vector
+    let mut cn_calls = vec![0u32; num_nodes];
+
+    // Solve each partition
+    for (i, partition) in partitions.iter().enumerate() {
+        info!(
+            "Solving partition {}/{}: nodes {}..{} ({} nodes)",
+            i + 1, partitions.len(),
+            partition.local_min_id,
+            partition.local_min_id + partition.num_nodes - 1,
+            partition.num_nodes
+        );
+
+        // Filter edges to only those internal to this partition
+        let (local_edges, local_left_edges, local_right_edges) =
+            filter_edges_for_partition(edges, partition, min_id);
+
+        debug!(
+            "Partition {}: {} internal edges (dropped {} cross-partition)",
+            i + 1, local_edges.len(), edges.len() - local_edges.len()
+        );
+
+        // Extract nodes with updated edge counts
+        let local_nodes = extract_partition_nodes(
+            nodes, partition, &local_left_edges, &local_right_edges,
+        );
+
+        // Solve this partition
+        let partition_result = solve(
+            &local_nodes,
+            &local_edges,
+            partition.local_min_id,
+            alpha,
+            rlen_params,
+            cheap_penalty,
+            source_prob,
+            complexity,
+            prob_scale,
+            threads,
+        )?;
+
+        // Copy results to global output
+        for (local_idx, &cn) in partition_result.iter().enumerate() {
+            let global_idx = partition.global_start + local_idx;
+            cn_calls[global_idx] = cn;
+        }
+    }
+
+    // Log summary statistics
+    let cn_sum: u32 = cn_calls.iter().sum();
+    let cn_max = cn_calls.iter().max().unwrap_or(&0);
+    let cn_min = cn_calls.iter().min().unwrap_or(&0);
+    info!(
+        "Partitioned ILP complete: {} nodes, CN range [{}, {}], total CN={}",
+        cn_calls.len(), cn_min, cn_max, cn_sum
+    );
 
     Ok(cn_calls)
 }

@@ -6,6 +6,7 @@ use std::path::Path;
 
 pub mod cn;
 pub mod ilp;
+pub mod partition;
 
 // ─── Edge Structure ──────────────────────────────────────────────────────────
 
