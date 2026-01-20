@@ -645,6 +645,16 @@ pub fn solve_partitioned(
         num_nodes, partitions.len(), partition_size
     );
 
+    // Scale cheap_penalty based on partition ratio - smaller partitions need stricter penalty
+    // because they have proportionally more boundary nodes (higher surface-to-volume ratio)
+    let partition_ratio = num_nodes as f64 / partition_size as f64;
+    let scaling_factor = partition_ratio.log2().max(1.0);
+    let partition_cheap_penalty = cheap_penalty * scaling_factor;
+    info!(
+        "Scaling cheap_penalty by {:.2}x for partitioning: {:.1} → {:.1}",
+        scaling_factor, cheap_penalty, partition_cheap_penalty
+    );
+
     // Allocate output vector
     let mut cn_calls = vec![0u32; num_nodes];
 
@@ -679,7 +689,7 @@ pub fn solve_partitioned(
             partition.local_min_id,
             alpha,
             rlen_params,
-            cheap_penalty,
+            partition_cheap_penalty,
             source_prob,
             complexity,
             prob_scale,
