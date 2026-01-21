@@ -15,6 +15,7 @@ path = "src/main.rs"
 [features]
 default = []
 metis = ["dep:metis"]
+gurobi = ["good_lp/lp-solvers"]
 
 [dependencies]
 metis = { version = "0.2", features = ["vendored"], optional = true }

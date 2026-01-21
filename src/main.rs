@@ -10,90 +10,131 @@ use log::{info, warn, error, debug};
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
+    // ─── Input ───────────────────────────────────────────────────────────────
+
     /// Input GFA pangenome graph file (supports .gz/.bgz compression)
-    #[arg(long)]
+    #[arg(help_heading = "Input", long)]
     gfa: String,
 
     /// Input GAF alignment file
-    #[arg(short, long)]
+    #[arg(help_heading = "Input", short = 'g', long)]
     gaf: String,
 
-    /// Scale coverage values by node length
-    #[arg(short, long)]
-    len_scale: bool,
+    // ─── Output ──────────────────────────────────────────────────────────────
 
     /// Emit graph coverage vector in a single column
-    #[arg(short, long)]
+    #[arg(help_heading = "Output", short, long)]
     coverage_column: bool,
 
+    /// Verbosity level: 0=warn, 1=info, 2=debug
+    #[arg(help_heading = "Output", short, long, default_value_t = 1)]
+    verbose: u8,
+
+    // ─── Coverage Mode ───────────────────────────────────────────────────────
+
+    /// Scale coverage values by node length
+    #[arg(help_heading = "Coverage mode", short, long, conflicts_with = "copy_number")]
+    len_scale: bool,
+
     /// Weight coverage by query group occurrences
-    #[arg(short = 'w', long)]
+    #[arg(help_heading = "Coverage mode", short = 'w', long, conflicts_with = "copy_number")]
     weight_queries: bool,
 
-    // ─── Copy Number Options ─────────────────────────────────────────────────
+    // ─── Copy Number Estimation ──────────────────────────────────────────────
 
     /// Enable copy number estimation
-    #[arg(long)]
+    #[arg(help_heading = "Copy number estimation", long)]
     copy_number: bool,
 
-    /// Background CN values to test for parameter estimation [default: 1,2]
-    #[arg(long, value_delimiter = ',', default_values_t = vec![1, 2])]
+    /// Background CN values to test for parameter estimation
+    #[arg(help_heading = "Copy number estimation", long, value_delimiter = ',', default_values_t = vec![1, 2],
+          requires = "copy_number")]
     ploidy: Vec<u32>,
 
     /// Bin size (bp) for negative binomial parameter estimation
-    #[arg(long, default_value_t = 100)]
+    #[arg(help_heading = "Copy number estimation", long, default_value_t = 100,
+          requires = "copy_number")]
     bin_size: usize,
 
     /// CN=0 sensitivity: lower = more aggressive deletion calling
-    #[arg(long, default_value_t = 0.02)]
+    #[arg(help_heading = "Copy number estimation", long, default_value_t = 0.02,
+          requires = "copy_number")]
     epsilon: f64,
 
     /// Skip ILP flow constraints, use simple ML estimation (faster)
-    #[arg(long)]
+    #[arg(help_heading = "Copy number estimation", long, requires = "copy_number")]
     no_flow: bool,
 
+    /// Disable read deduplication (dedup enabled by default, requires sorted GAF)
+    #[arg(help_heading = "Copy number estimation", long, requires = "copy_number")]
+    no_dedup: bool,
+
+    // ─── ILP Tuning ──────────────────────────────────────────────────────────
+
     /// Model complexity: 1=basic, 2=+edge_cov_penalty, 3=+reverse_edge_penalty
-    #[arg(long, default_value_t = 2)]
+    #[arg(help_heading = "ILP tuning", long, default_value_t = 2,
+          requires = "copy_number")]
     complexity: u8,
 
     /// Expensive super-edge penalty (source_prob)
-    #[arg(long, default_value_t = -10000.0)]
+    #[arg(help_heading = "ILP tuning", long, default_value_t = -10000.0,
+          requires = "copy_number")]
     source_prob: f64,
 
     /// Cheap super-edge penalty (cheap_source)
-    #[arg(long, default_value_t = -25.0)]
+    #[arg(help_heading = "ILP tuning", long, default_value_t = -25.0,
+          requires = "copy_number")]
     cheap_source: f64,
 
-    /// Scale factor for log-probabilities in ILP (higher = coverage matters more vs flow)
-    #[arg(long, default_value_t = 1.0)]
+    /// Scale factor for log-probabilities (higher = coverage matters more vs flow)
+    #[arg(help_heading = "ILP tuning", long, default_value_t = 1.0,
+          requires = "copy_number")]
     prob_scale: f64,
 
-    /// CN probability cutoff: controls how many CN values are considered per node
-    /// If not specified, auto-computed as 4 * |source_prob| (floco-compatible)
-    #[arg(long)]
+    /// CN probability cutoff (auto-computed as 4×|source_prob| if not set)
+    #[arg(help_heading = "ILP tuning", long, requires = "copy_number")]
     diff_cutoff: Option<f64>,
 
+    // ─── Solver and Partitioning ─────────────────────────────────────────────
+
+    /// ILP solver: highs (default) or gurobi
+    #[cfg(feature = "gurobi")]
+    #[arg(help_heading = "Solver", long, default_value = "highs",
+          requires = "copy_number")]
+    solver: String,
+
     /// Number of threads for ILP solver (0 = auto)
-    #[arg(short = 't', long, default_value_t = 0)]
+    #[arg(help_heading = "Solver", short = 't', long, default_value_t = 0,
+          requires = "copy_number")]
     threads: u32,
 
     /// Maximum nodes per ILP partition (0 = no partitioning)
-    #[arg(long, default_value_t = 1_500_000)]
+    #[arg(help_heading = "Solver", long, default_value_t = 1_500_000,
+          requires = "copy_number")]
     partition_size: usize,
 
-    /// Use METIS for graph-aware partitioning (requires metis feature)
-    /// METIS minimizes edge cuts, reducing boundary nodes that need cheap_penalty
-    #[arg(long)]
+    /// Use METIS graph-aware partitioning
+    #[cfg(feature = "metis")]
+    #[arg(help_heading = "Solver", long, requires = "copy_number")]
     use_metis: bool,
+}
 
-    /// Disable read deduplication (dedup is enabled by default for CN mode)
-    /// Deduplication filters overlapping multi-mappings per read (requires sorted GAF)
-    #[arg(long)]
-    no_dedup: bool,
+impl Args {
+    /// Get solver name (highs is default when gurobi feature not enabled)
+    fn solver(&self) -> &str {
+        #[cfg(feature = "gurobi")]
+        { &self.solver }
+        #[cfg(not(feature = "gurobi"))]
+        { "highs" }
+    }
 
-    /// Verbosity level: 0=warn, 1=info, 2=debug [default: 1]
-    #[arg(short, long, default_value_t = 1)]
-    verbose: u8,
+    /// Check if METIS partitioning is requested
+    fn use_metis(&self) -> bool {
+        #[cfg(feature = "metis")]
+        { self.use_metis }
+        #[cfg(not(feature = "metis"))]
+        { false }
+    }
 }
 
 fn main() {
@@ -143,14 +184,6 @@ fn run_coverage(args: &Args) {
 
 /// Copy number estimation mode
 fn run_copy_number(args: &Args) {
-    // Warn about ignored options
-    if args.len_scale {
-        warn!("--len-scale is ignored in copy-number mode (length normalization is handled internally)");
-    }
-    if args.weight_queries {
-        warn!("--weight-queries is ignored in copy-number mode (read deduplication handles multi-mapping)");
-    }
-
     info!("Parsing GFA with edges...");
 
     // Parse GFA with edges (edges will be mutated to track support)
@@ -302,7 +335,8 @@ fn run_copy_number(args: &Args) {
                 args.prob_scale,
                 args.threads,
                 args.partition_size,
-                args.use_metis,
+                args.use_metis(),
+                args.solver(),
             ) {
                 Ok(calls) => calls,
                 Err(e) => {
@@ -324,6 +358,7 @@ fn run_copy_number(args: &Args) {
                 args.complexity,
                 args.prob_scale,
                 args.threads,
+                args.solver(),
             ) {
                 Ok(calls) => calls,
                 Err(e) => {

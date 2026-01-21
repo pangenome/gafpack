@@ -7,8 +7,10 @@ use crate::cn;
 use crate::partition::{create_partitions, create_partitions_metis, extract_partition_nodes, filter_edges_for_partition};
 use crate::Edge;
 use crate::ReadLengthParams;
-use good_lp::{constraint, variable, Expression, ProblemVariables, Solution, SolverModel, Variable};
+use good_lp::{constraint, variable, Constraint, Expression, ProblemVariables, Solution, SolverModel, Variable};
 use good_lp::solvers::highs::{highs, HighsParallelType};
+#[cfg(feature = "gurobi")]
+use good_lp::solvers::lp_solvers::{LpSolver, GurobiSolver};
 use log::{debug, info, warn};
 use std::collections::HashMap;
 
@@ -184,6 +186,7 @@ impl IlpNode {
 /// * `complexity` - Model complexity: 1=basic, 2=+edge_cov_pen, 3=+reverse_edge_pen
 /// * `prob_scale` - Scale factor for log-probabilities (higher = coverage matters more)
 /// * `threads` - Number of threads for parallel solving (0 = auto)
+/// * `solver` - ILP solver to use: "highs" (default) or "gurobi"
 pub fn solve(
     nodes: &[IlpNode],
     edges: &[Edge],
@@ -195,6 +198,7 @@ pub fn solve(
     complexity: u8,
     prob_scale: f64,
     threads: u32,
+    solver: &str,
 ) -> Result<Vec<u32>, String> {
     if nodes.is_empty() {
         warn!("No nodes to solve");
@@ -393,20 +397,11 @@ pub fn solve(
 
     // ─── Constraints ─────────────────────────────────────────────────────────
 
-    // Build problem first, then configure solver
+    // Build problem objective
     let unsolved = vars.maximise(objective);
 
-    // Configure HiGHS solver with parallelism
-    let mut problem = if threads > 0 {
-        debug!("Using {} threads for ILP solver", threads);
-        highs(unsolved)
-            .set_parallel(HighsParallelType::On)
-            .set_threads(threads)
-    } else {
-        debug!("Using automatic thread selection for ILP solver");
-        highs(unsolved)
-            .set_parallel(HighsParallelType::On)
-    };
+    // Collect all constraints first, then add to solver-specific problem
+    let mut constraints: Vec<Constraint> = Vec::new();
 
     // 1. Indicator variable constraints: exactly one CN value, and CN = sum(k * z[k])
     for (i, node) in nodes.iter().enumerate() {
@@ -415,7 +410,7 @@ pub fn solve(
         for k in 0..node.cn_probs.len() {
             sum_z += z_vars[i][k];
         }
-        problem = problem.with(constraint!(sum_z == 1.0));
+        constraints.push(constraint!(sum_z == 1.0));
 
         // CN[i] = sum_k (cn_lo + k) * z[i][k]
         let mut cn_expr: Expression = Expression::from(0.0);
@@ -423,7 +418,7 @@ pub fn solve(
             let cn_val = node.cn_lo + k as i32;
             cn_expr += cn_val as f64 * z_vars[i][k];
         }
-        problem = problem.with(constraint!(cn_expr == cn_vars[i]));
+        constraints.push(constraint!(cn_expr == cn_vars[i]));
     }
 
     debug!("Added {} indicator constraints", n * 2);
@@ -450,22 +445,22 @@ pub fn solve(
 
         // Flow balance: left_in → right_out, right_in → left_out
         // source_left + l_edges_in == sink_right + r_edges_out
-        problem = problem.with(constraint!(
+        constraints.push(constraint!(
             src_left[i] + l_in.clone() == snk_right[i] + r_out.clone()
         ));
 
         // source_right + r_edges_in == sink_left + l_edges_out
-        problem = problem.with(constraint!(
+        constraints.push(constraint!(
             src_right[i] + r_in.clone() == snk_left[i] + l_out.clone()
         ));
 
         // Total inflow = CN
-        problem = problem.with(constraint!(
+        constraints.push(constraint!(
             src_left[i] + src_right[i] + l_in.clone() + r_in.clone() == cn_vars[i]
         ));
 
         // Total outflow = CN
-        problem = problem.with(constraint!(
+        constraints.push(constraint!(
             snk_left[i] + snk_right[i] + r_out + l_out == cn_vars[i]
         ));
     }
@@ -480,23 +475,23 @@ pub fn solve(
         // Super-edge indicators: x1 activated by src, x2 activated by snk
         for i in 0..n {
             // Left side
-            problem = problem.with(constraint!(BIG_M * x1_left[i] >= src_left[i]));
-            problem = problem.with(constraint!(BIG_M * x2_left[i] >= snk_left[i]));
+            constraints.push(constraint!(BIG_M * x1_left[i] >= src_left[i]));
+            constraints.push(constraint!(BIG_M * x2_left[i] >= snk_left[i]));
             // CRITICAL: At least one of src or snk must be used (floco's x1 + x2 >= 1)
-            problem = problem.with(constraint!(x1_left[i] + x2_left[i] >= 1.0));
+            constraints.push(constraint!(x1_left[i] + x2_left[i] >= 1.0));
             // Right side
-            problem = problem.with(constraint!(BIG_M * x1_right[i] >= src_right[i]));
-            problem = problem.with(constraint!(BIG_M * x2_right[i] >= snk_right[i]));
+            constraints.push(constraint!(BIG_M * x1_right[i] >= src_right[i]));
+            constraints.push(constraint!(BIG_M * x2_right[i] >= snk_right[i]));
             // CRITICAL: At least one of src or snk must be used (floco's x1 + x2 >= 1)
-            problem = problem.with(constraint!(x1_right[i] + x2_right[i] >= 1.0));
+            constraints.push(constraint!(x1_right[i] + x2_right[i] >= 1.0));
         }
 
         // Edge pair indicators: x1 activated by forward flow, x2 activated by reverse flow
         for (p, &(fwd_idx, rev_idx)) in pair_indices.iter().enumerate() {
-            problem = problem.with(constraint!(BIG_M * pair_x1[p] >= flow_vars[fwd_idx]));
-            problem = problem.with(constraint!(BIG_M * pair_x2[p] >= flow_vars[rev_idx]));
+            constraints.push(constraint!(BIG_M * pair_x1[p] >= flow_vars[fwd_idx]));
+            constraints.push(constraint!(BIG_M * pair_x2[p] >= flow_vars[rev_idx]));
             // CRITICAL: At least one direction must be used (floco's x1 + x2 >= 1)
-            problem = problem.with(constraint!(pair_x1[p] + pair_x2[p] >= 1.0));
+            constraints.push(constraint!(pair_x1[p] + pair_x2[p] >= 1.0));
         }
 
         debug!("Added {} x1/x2 indicator constraints", n * 6 + pair_indices.len() * 3);
@@ -504,14 +499,93 @@ pub fn solve(
 
     // ─── Solve ───────────────────────────────────────────────────────────────
 
-    info!("Solving ILP...");
-    let solution = problem.solve().map_err(|e| format!("ILP solve failed: {:?}", e))?;
+    info!("Solving ILP with {} solver...", solver);
 
-    // Extract CN values
-    let cn_calls: Vec<u32> = cn_vars
-        .iter()
-        .map(|&v| solution.value(v).round() as u32)
-        .collect();
+    // Solve and extract CN values (each solver path extracts its own results)
+    let cn_calls: Vec<u32> = match solver {
+        "highs" => {
+            // Configure HiGHS solver with parallelism
+            let mut problem = if threads > 0 {
+                debug!("Using {} threads for HiGHS solver", threads);
+                highs(unsolved)
+                    .set_parallel(HighsParallelType::On)
+                    .set_threads(threads)
+            } else {
+                debug!("Using automatic thread selection for HiGHS solver");
+                highs(unsolved)
+                    .set_parallel(HighsParallelType::On)
+            };
+
+            // Add all constraints
+            for c in constraints {
+                problem = problem.with(c);
+            }
+
+            let solution = problem.solve().map_err(|e| format!("HiGHS solve failed: {:?}", e))?;
+
+            // Extract CN values
+            let cn_calls: Vec<u32> = cn_vars
+                .iter()
+                .map(|&v| solution.value(v).round() as u32)
+                .collect();
+
+            // Diagnostics: Super-edge usage
+            let mut src_left_total = 0.0;
+            let mut src_right_total = 0.0;
+            let mut snk_left_total = 0.0;
+            let mut snk_right_total = 0.0;
+            let mut nodes_with_super_edges = 0usize;
+
+            for i in 0..n {
+                let sl = solution.value(src_left[i]);
+                let sr = solution.value(src_right[i]);
+                let kl = solution.value(snk_left[i]);
+                let kr = solution.value(snk_right[i]);
+
+                src_left_total += sl;
+                src_right_total += sr;
+                snk_left_total += kl;
+                snk_right_total += kr;
+
+                if sl > 0.5 || sr > 0.5 || kl > 0.5 || kr > 0.5 {
+                    nodes_with_super_edges += 1;
+                }
+            }
+
+            debug!(
+                "Super-edge usage: src_left={:.0}, src_right={:.0}, snk_left={:.0}, snk_right={:.0}",
+                src_left_total, src_right_total, snk_left_total, snk_right_total
+            );
+            debug!("{} nodes use super-edges (flow enters/exits at graph boundaries)", nodes_with_super_edges);
+
+            cn_calls
+        }
+        #[cfg(feature = "gurobi")]
+        "gurobi" => {
+            debug!("Using Gurobi solver via lp-solvers backend");
+            let mut problem = unsolved.using(LpSolver(GurobiSolver::new()));
+
+            // Add all constraints
+            for c in constraints {
+                problem = problem.with(c);
+            }
+
+            let solution = problem.solve().map_err(|e| format!("Gurobi solve failed: {:?}", e))?;
+
+            // Extract CN values
+            cn_vars
+                .iter()
+                .map(|&v| solution.value(v).round() as u32)
+                .collect()
+        }
+        #[cfg(not(feature = "gurobi"))]
+        "gurobi" => {
+            return Err("Gurobi solver requested but 'gurobi' feature is not enabled. Rebuild with --features gurobi".to_string());
+        }
+        _ => {
+            return Err(format!("Unknown solver: {}. Valid options: highs, gurobi", solver));
+        }
+    };
 
     // Log summary statistics
     let cn_sum: u32 = cn_calls.iter().sum();
@@ -530,37 +604,6 @@ pub fn solve(
     let mut cn_dist_vec: Vec<_> = cn_dist.into_iter().collect();
     cn_dist_vec.sort_by_key(|&(cn, _)| cn);
     debug!("CN distribution: {:?}", cn_dist_vec);
-
-    // ─── Diagnostics: Super-edge usage and flow-constrained nodes ────────────
-
-    // Count super-edge usage
-    let mut src_left_total = 0.0;
-    let mut src_right_total = 0.0;
-    let mut snk_left_total = 0.0;
-    let mut snk_right_total = 0.0;
-    let mut nodes_with_super_edges = 0usize;
-
-    for i in 0..n {
-        let sl = solution.value(src_left[i]);
-        let sr = solution.value(src_right[i]);
-        let kl = solution.value(snk_left[i]);
-        let kr = solution.value(snk_right[i]);
-
-        src_left_total += sl;
-        src_right_total += sr;
-        snk_left_total += kl;
-        snk_right_total += kr;
-
-        if sl > 0.5 || sr > 0.5 || kl > 0.5 || kr > 0.5 {
-            nodes_with_super_edges += 1;
-        }
-    }
-
-    debug!(
-        "Super-edge usage: src_left={:.0}, src_right={:.0}, snk_left={:.0}, snk_right={:.0}",
-        src_left_total, src_right_total, snk_left_total, snk_right_total
-    );
-    debug!("{} nodes use super-edges (flow enters/exits at graph boundaries)", nodes_with_super_edges);
 
     // Find nodes where ILP CN differs from ML estimate (flow-constrained)
     let mut flow_constrained_nodes: Vec<(usize, u32, u32)> = Vec::new();
@@ -614,6 +657,7 @@ pub fn solve(
 /// * `threads` - Number of threads for parallel solving (0 = auto)
 /// * `partition_size` - Maximum nodes per partition
 /// * `use_metis` - Use METIS graph-aware partitioning instead of sequential
+/// * `solver` - ILP solver to use: "highs" (default) or "gurobi"
 pub fn solve_partitioned(
     nodes: &[IlpNode],
     edges: &[Edge],
@@ -627,6 +671,7 @@ pub fn solve_partitioned(
     threads: u32,
     partition_size: usize,
     use_metis: bool,
+    solver: &str,
 ) -> Result<Vec<u32>, String> {
     let num_nodes = nodes.len();
 
@@ -644,7 +689,7 @@ pub fn solve_partitioned(
         info!("Graph fits in single partition, using standard solve");
         return solve(
             nodes, edges, min_id, alpha, rlen_params,
-            cheap_penalty, source_prob, complexity, prob_scale, threads,
+            cheap_penalty, source_prob, complexity, prob_scale, threads, solver,
         );
     }
 
@@ -701,6 +746,7 @@ pub fn solve_partitioned(
             complexity,
             prob_scale,
             threads,
+            solver,
         )?;
 
         // Copy results to global output
