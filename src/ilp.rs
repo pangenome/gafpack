@@ -4,7 +4,7 @@
 //! Implements network flow constraints to ensure biologically plausible CN assignments.
 
 use crate::cn;
-use crate::partition::{create_partitions, extract_partition_nodes, filter_edges_for_partition};
+use crate::partition::{create_partitions, create_partitions_metis, extract_partition_nodes, filter_edges_for_partition};
 use crate::Edge;
 use crate::ReadLengthParams;
 use good_lp::{constraint, variable, Expression, ProblemVariables, Solution, SolverModel, Variable};
@@ -613,6 +613,7 @@ pub fn solve(
 /// * `prob_scale` - Scale factor for log-probabilities
 /// * `threads` - Number of threads for parallel solving (0 = auto)
 /// * `partition_size` - Maximum nodes per partition
+/// * `use_metis` - Use METIS graph-aware partitioning instead of sequential
 pub fn solve_partitioned(
     nodes: &[IlpNode],
     edges: &[Edge],
@@ -625,11 +626,18 @@ pub fn solve_partitioned(
     prob_scale: f64,
     threads: u32,
     partition_size: usize,
+    use_metis: bool,
 ) -> Result<Vec<u32>, String> {
     let num_nodes = nodes.len();
 
     // Create partitions
-    let partitions = create_partitions(min_id, num_nodes, partition_size);
+    let partitions = if use_metis {
+        let num_partitions = (num_nodes + partition_size - 1) / partition_size;
+        info!("Using METIS graph-aware partitioning into {} partitions", num_partitions);
+        create_partitions_metis(num_nodes, edges, min_id, num_partitions)?
+    } else {
+        create_partitions(min_id, num_nodes, partition_size)
+    };
 
     if partitions.len() == 1 {
         // No partitioning needed, use regular solve
@@ -661,11 +669,10 @@ pub fn solve_partitioned(
     // Solve each partition
     for (i, partition) in partitions.iter().enumerate() {
         info!(
-            "Solving partition {}/{}: nodes {}..{} ({} nodes)",
+            "Solving partition {}/{}: {} nodes (local_min_id={})",
             i + 1, partitions.len(),
-            partition.local_min_id,
-            partition.local_min_id + partition.num_nodes - 1,
-            partition.num_nodes
+            partition.num_nodes(),
+            partition.local_min_id()
         );
 
         // Filter edges to only those internal to this partition
@@ -686,7 +693,7 @@ pub fn solve_partitioned(
         let partition_result = solve(
             &local_nodes,
             &local_edges,
-            partition.local_min_id,
+            partition.local_min_id(),
             alpha,
             rlen_params,
             partition_cheap_penalty,
@@ -697,8 +704,10 @@ pub fn solve_partitioned(
         )?;
 
         // Copy results to global output
+        // For sparse partitions, we need to use the actual global indices
+        let global_indices = partition.global_indices();
         for (local_idx, &cn) in partition_result.iter().enumerate() {
-            let global_idx = partition.global_start + local_idx;
+            let global_idx = global_indices[local_idx];
             cn_calls[global_idx] = cn;
         }
     }

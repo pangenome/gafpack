@@ -12,7 +12,12 @@ path = "src/lib.rs"
 name = "gafpack"
 path = "src/main.rs"
 
+[features]
+default = []
+metis = ["dep:metis"]
+
 [dependencies]
+metis = { version = "0.2", features = ["vendored"], optional = true }
 clap = { version = "4.5", features = ["derive"] }
 niffler = "3.0"
 flate2 = "1.1"

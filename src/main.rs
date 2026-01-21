@@ -81,6 +81,11 @@ struct Args {
     #[arg(long, default_value_t = 1_500_000)]
     partition_size: usize,
 
+    /// Use METIS for graph-aware partitioning (requires metis feature)
+    /// METIS minimizes edge cuts, reducing boundary nodes that need cheap_penalty
+    #[arg(long)]
+    use_metis: bool,
+
     /// Disable read deduplication (dedup is enabled by default for CN mode)
     /// Deduplication filters overlapping multi-mappings per read (requires sorted GAF)
     #[arg(long)]
@@ -297,6 +302,7 @@ fn run_copy_number(args: &Args) {
                 args.prob_scale,
                 args.threads,
                 args.partition_size,
+                args.use_metis,
             ) {
                 Ok(calls) => calls,
                 Err(e) => {
